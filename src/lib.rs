@@ -2,9 +2,9 @@
 
 #![deny(rust_2018_idioms)]
 
-use std::fmt;
-use std::mem;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::fmt;
+use core::mem;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 pub fn sync_channel<T>() -> (SyncSender<T>, SyncReceiver<T>) {
