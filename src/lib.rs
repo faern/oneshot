@@ -8,9 +8,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 pub fn sync_channel<T>() -> (SyncSender<T>, SyncReceiver<T>) {
-    // Allocate the state on the heap and initialize it with `new_state()` and get the pointer.
+    // Allocate the state on the heap and initialize it with `states::init()` and get the pointer.
     // The last endpoint of the channel to be alive is responsible for freeing the state.
-    let state = Box::into_raw(Box::new(AtomicUsize::new(new_state())));
+    let state = Box::into_raw(Box::new(AtomicUsize::new(states::init())));
     (
         SyncSender {
             state,
@@ -53,11 +53,11 @@ impl<T> SyncSender<T> {
 
         // Store the address to the value in the state and read out what state the receiver is in
         let state = unsafe { &*state_ptr }.swap(value_ptr as usize, Ordering::SeqCst);
-        if state == new_state() {
+        if state == states::init() {
             // The receiver is alive and has not started waiting. Send done
             // Receiver frees state and value from heap
             Ok(())
-        } else if state == dropped_state() {
+        } else if state == states::dropped() {
             // The receiver was already dropped. We are responsible for freeing the state and value
             unsafe { Box::from_raw(state_ptr) };
             Err(DroppedReceiverError(unsafe { Box::from_raw(value_ptr) }))
@@ -72,10 +72,10 @@ impl<T> SyncSender<T> {
 
 impl<T> Drop for SyncSender<T> {
     fn drop(&mut self) {
-        let state = unsafe { &*self.state }.swap(dropped_state(), Ordering::SeqCst);
-        if state == new_state() {
+        let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+        if state == states::init() {
             // The receiver has not started waiting, nor is it dropped. Nothing to do
-        } else if state == dropped_state() {
+        } else if state == states::dropped() {
             // The receiver was already dropped. We are responsible for freeing the state
             unsafe { Box::from_raw(self.state) };
         } else {
@@ -92,16 +92,16 @@ impl<T> SyncReceiver<T> {
         mem::forget(self);
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
-        if state == new_state() {
+        if state == states::init() {
             // The sender has not sent anything, nor is it dropped
             // Put our thread object on the heap. We are always responsible for freeing it
             let thread_ptr = Box::into_raw(Box::new(thread::current()));
             let state = unsafe { &*state_ptr }.compare_and_swap(
-                new_state(),
+                states::init(),
                 thread_ptr as usize,
                 Ordering::SeqCst,
             );
-            if state == new_state() {
+            if state == states::init() {
                 // We stored our thread, now we park
                 loop {
                     thread::park();
@@ -113,7 +113,7 @@ impl<T> SyncReceiver<T> {
                         return Ok(unsafe { *Box::from_raw(value_ptr as *mut T) });
                     }
                 }
-            } else if state == dropped_state() {
+            } else if state == states::dropped() {
                 // The sender was dropped while we prepared to park
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
@@ -124,7 +124,7 @@ impl<T> SyncReceiver<T> {
                 unsafe { Box::from_raw(state_ptr) };
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
-        } else if state == dropped_state() {
+        } else if state == states::dropped() {
             // The sender was already dropped
             unsafe { Box::from_raw(state_ptr) };
             Err(DroppedSenderError(()))
@@ -138,10 +138,10 @@ impl<T> SyncReceiver<T> {
 
 impl<T> Drop for SyncReceiver<T> {
     fn drop(&mut self) {
-        let state = unsafe { &*self.state }.swap(dropped_state(), Ordering::SeqCst);
-        if state == new_state() {
+        let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+        if state == states::init() {
             // The sender has not sent anything, nor is it dropped
-        } else if state == dropped_state() {
+        } else if state == states::dropped() {
             // The sender was already dropped. We are responsible for freeing the state
             unsafe { Box::from_raw(self.state) };
         } else {
@@ -165,6 +165,13 @@ impl std::error::Error for DroppedSenderError {}
 
 pub struct DroppedReceiverError<T>(pub Box<T>);
 
+impl<T: Eq> Eq for DroppedReceiverError<T> {}
+impl<T: PartialEq> PartialEq for DroppedReceiverError<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
 impl<T> DroppedReceiverError<T> {
     pub fn into_value(self) -> T {
         *self.0
@@ -185,24 +192,34 @@ impl<T> fmt::Debug for DroppedReceiverError<T> {
 
 impl<T> std::error::Error for DroppedReceiverError<T> {}
 
-/// Returns a memory address in integer form. The value is guaranteed to:
-/// * be the same for every call in the same process
-/// * be different from what `dropped_state` returns
-/// * and never equal a pointer returned from `Box::into_raw`.
-#[inline(always)]
-fn new_state() -> usize {
-    static NEW: u8 = 1u8;
-    &NEW as *const u8 as usize
-}
-
-/// Returns a memory address in integer form. The value is guaranteed to:
-/// * be the same for every call in the same process
-/// * be different from what `new_state` returns
-/// * and never equal a pointer returned from `Box::into_raw`.
-#[inline(always)]
-fn dropped_state() -> usize {
+mod states {
+    static INIT: u8 = 1u8;
     static DROPPED: u8 = 2u8;
-    &DROPPED as *const u8 as usize
+
+    /// Returns a memory address in integer form representing the initial state of a channel.
+    /// This state is active while both the sender and receiver are still alive, no value
+    /// has yet been sent and the receiver has not started receiving.
+    ///
+    /// The value is guaranteed to:
+    /// * be the same for every call in the same process
+    /// * be different from what `states::dropped` returns
+    /// * and never equal a pointer returned from `Box::into_raw`.
+    #[inline(always)]
+    pub fn init() -> usize {
+        &INIT as *const u8 as usize
+    }
+
+    /// Returns a memory address in integer form representing a channel where one or both ends
+    /// have been dropped.
+    ///
+    /// The value is guaranteed to:
+    /// * be the same for every call in the same process
+    /// * be different from what `states::init` returns
+    /// * and never equal a pointer returned from `Box::into_raw`.
+    #[inline(always)]
+    pub fn dropped() -> usize {
+        &DROPPED as *const u8 as usize
+    }
 }
 
 #[cfg(test)]
@@ -213,7 +230,9 @@ mod tests {
     fn send_with_dropped_receiver() {
         let (sender, receiver) = crate::sync_channel();
         mem::drop(receiver);
-        assert_eq!(sender.send(5usize), Err(5));
+        let send_error = sender.send(5u128).unwrap_err();
+        assert_eq!(send_error, crate::DroppedReceiverError(Box::new(5)));
+        assert_eq!(send_error.into_value(), 5);
     }
 
     #[test]
