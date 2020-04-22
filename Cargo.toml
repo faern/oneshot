@@ -1,0 +1,13 @@
+[package]
+name = "oneshot"
+version = "0.1.0"
+authors = ["Linus Färnstrand <faern@faern.net>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+description = "Oneshot spsc channel working both in and between sync and async environments"
+repository = "https://github.com/faern/oneshot"
+keywords = ["oneshot", "spsc", "async", "sync", "channel"]
+categories = ["asynchronous", "concurrency"]
+edition = "2018"
+
+[dependencies]
