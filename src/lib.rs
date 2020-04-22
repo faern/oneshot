@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 pub fn sync_channel<T>() -> (SyncSender<T>, SyncReceiver<T>) {
-    // Allocate the state on the heap and initialize it with `new_state()` and get the pointer
+    // Allocate the state on the heap and initialize it with `new_state()` and get the pointer.
+    // The last endpoint of the channel to be alive is responsible for freeing the state.
     let state = Box::into_raw(Box::new(AtomicUsize::new(new_state())));
     (
         SyncSender {
@@ -22,11 +23,13 @@ pub fn sync_channel<T>() -> (SyncSender<T>, SyncReceiver<T>) {
     )
 }
 
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct SyncSender<T> {
     state: *mut AtomicUsize,
     _marker: std::marker::PhantomData<T>,
 }
 
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct SyncReceiver<T> {
     state: *mut AtomicUsize,
     _marker: std::marker::PhantomData<T>,
@@ -38,24 +41,26 @@ unsafe impl<T: Send> Send for SyncReceiver<T> {}
 impl<T> SyncSender<T> {
     pub fn send(self, value: T) -> Result<(), T> {
         let state_ptr = self.state;
-        // Don't run our Drop implementation if we have sent something
+        // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
 
-        // Put the value on the heap and get the pointer
+        // Put the value on the heap and get the pointer. If sending succeeds the receiver is
+        // responsible for freeing it, otherwise we do that
         let value_ptr = Box::into_raw(Box::new(value));
 
         // Store the address to the value in the state and read out what state the receiver is in
         let state = unsafe { &*state_ptr }.swap(value_ptr as usize, Ordering::SeqCst);
         if state == new_state() {
-            // The receiver has not started waiting, nor is it dropped. Send done
+            // The receiver is alive and has not started waiting. Send done
             // Receiver frees state and value from heap
             Ok(())
         } else if state == dropped_state() {
-            // The receiver was already dropped. We are responsible for freeing the state
+            // The receiver was already dropped. We are responsible for freeing the state and value
             unsafe { Box::from_raw(state_ptr) };
             Err(unsafe { *Box::from_raw(value_ptr) })
         } else {
-            // The receiver has started waiting. Wake it up so it can return the value
+            // The receiver is waiting. Wake it up so it can return the value. The receiver frees
+            // the state, the value and the thread instance in the state
             unsafe { &*(state as *const thread::Thread) }.unpark();
             Ok(())
         }
@@ -101,6 +106,7 @@ impl<T> SyncReceiver<T> {
                     let value_ptr = unsafe { &*state_ptr }.load(Ordering::SeqCst);
                     if value_ptr != thread_ptr as usize {
                         unsafe { Box::from_raw(thread_ptr) };
+                        unsafe { Box::from_raw(state_ptr) };
                         return Ok(unsafe { *Box::from_raw(value_ptr as *mut T) });
                     }
                 }
@@ -110,7 +116,7 @@ impl<T> SyncReceiver<T> {
                 unsafe { Box::from_raw(state_ptr) };
                 Err(Cancelled(()))
             } else {
-                // The sender sent data while we prepared to park. We free the state and the value
+                // The sender sent data while we prepared to park. We free everything
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
