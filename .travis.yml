@@ -1,0 +1,26 @@
+language: rust
+rust:
+  - nightly
+  - stable
+  - beta
+  - 1.39.0
+os:
+  - linux
+  - osx
+  - windows
+
+script:
+  - cargo build --verbose
+  - cargo test --verbose
+  - if [[ "${TRAVIS_RUST_VERSION}" = "stable" && $(uname -s) == "Linux" ]]; then
+      rustup component add rustfmt-preview;
+      rustfmt --version;
+      cargo fmt -- --check;
+    else
+      echo "Not checking formatting on this build";
+    fi
+
+notifications:
+  email:
+    on_success: never
+    on_failure: never
