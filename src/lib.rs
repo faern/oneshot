@@ -39,7 +39,10 @@ unsafe impl<T: Send> Send for SyncSender<T> {}
 unsafe impl<T: Send> Send for SyncReceiver<T> {}
 
 impl<T> SyncSender<T> {
-    pub fn send(self, value: T) -> Result<(), T> {
+    /// Sends `value` over the channel to the [`Receiver`].
+    /// Returns an error if the receiver was dropped before the send took place. The value can
+    /// be extracted from the error again.
+    pub fn send(self, value: T) -> Result<(), DroppedReceiverError<T>> {
         let state_ptr = self.state;
         // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
@@ -57,7 +60,7 @@ impl<T> SyncSender<T> {
         } else if state == dropped_state() {
             // The receiver was already dropped. We are responsible for freeing the state and value
             unsafe { Box::from_raw(state_ptr) };
-            Err(unsafe { *Box::from_raw(value_ptr) })
+            Err(DroppedReceiverError(unsafe { Box::from_raw(value_ptr) }))
         } else {
             // The receiver is waiting. Wake it up so it can return the value. The receiver frees
             // the state, the value and the thread instance in the state
@@ -83,7 +86,7 @@ impl<T> Drop for SyncSender<T> {
 }
 
 impl<T> SyncReceiver<T> {
-    pub fn recv(self) -> Result<T, Cancelled> {
+    pub fn recv(self) -> Result<T, DroppedSenderError> {
         let state_ptr = self.state;
         // Don't run our Drop implementation if we are receiving
         mem::forget(self);
@@ -114,7 +117,7 @@ impl<T> SyncReceiver<T> {
                 // The sender was dropped while we prepared to park
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
-                Err(Cancelled(()))
+                Err(DroppedSenderError(()))
             } else {
                 // The sender sent data while we prepared to park. We free everything
                 unsafe { Box::from_raw(thread_ptr) };
@@ -124,7 +127,7 @@ impl<T> SyncReceiver<T> {
         } else if state == dropped_state() {
             // The sender was already dropped
             unsafe { Box::from_raw(state_ptr) };
-            Err(Cancelled(()))
+            Err(DroppedSenderError(()))
         } else {
             // The sender already sent data. We free the state and the value
             unsafe { Box::from_raw(state_ptr) };
@@ -150,15 +153,37 @@ impl<T> Drop for SyncReceiver<T> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct Cancelled(());
+pub struct DroppedSenderError(());
 
-impl fmt::Display for Cancelled {
+impl fmt::Display for DroppedSenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "Oneshot sender dropped without sending anything".fmt(f)
     }
 }
 
-impl std::error::Error for Cancelled {}
+impl std::error::Error for DroppedSenderError {}
+
+pub struct DroppedReceiverError<T>(pub Box<T>);
+
+impl<T> DroppedReceiverError<T> {
+    pub fn into_value(self) -> T {
+        *self.0
+    }
+}
+
+impl<T> fmt::Display for DroppedReceiverError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "Oneshot receiver has already been dropped".fmt(f)
+    }
+}
+
+impl<T> fmt::Debug for DroppedReceiverError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DroppedReceiverError<{}>(_)", stringify!(T))
+    }
+}
+
+impl<T> std::error::Error for DroppedReceiverError<T> {}
 
 /// Returns a memory address in integer form. The value is guaranteed to:
 /// * be the same for every call in the same process
