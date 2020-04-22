@@ -93,8 +93,9 @@ impl<T> SyncReceiver<T> {
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
-            // The sender has not sent anything, nor is it dropped
-            // Put our thread object on the heap. We are always responsible for freeing it
+            // The sender is alive but has not sent anything yet.
+            // Put our thread object on the heap and in the state so the sender can unpark us.
+            // We are always responsible for freeing the heap allocated thread object.
             let thread_ptr = Box::into_raw(Box::new(thread::current()));
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
@@ -102,7 +103,8 @@ impl<T> SyncReceiver<T> {
                 Ordering::SeqCst,
             );
             if state == states::init() {
-                // We stored our thread, now we park
+                // We stored our thread, now we park until we detect that the sender has replaced
+                // the state. A changed state means the sender set it to a value.
                 loop {
                     thread::park();
                     // Check if the sender replaced our thread instance with the value pointer
@@ -125,7 +127,7 @@ impl<T> SyncReceiver<T> {
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
         } else if state == states::dropped() {
-            // The sender was already dropped
+            // The sender was already dropped before sending anything. We free the state
             unsafe { Box::from_raw(state_ptr) };
             Err(DroppedSenderError(()))
         } else {
@@ -140,7 +142,8 @@ impl<T> Drop for SyncReceiver<T> {
     fn drop(&mut self) {
         let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
         if state == states::init() {
-            // The sender has not sent anything, nor is it dropped
+            // The sender has not sent anything, nor is it dropped. The sender is responsible for
+            // freeing the state
         } else if state == states::dropped() {
             // The sender was already dropped. We are responsible for freeing the state
             unsafe { Box::from_raw(self.state) };
@@ -173,6 +176,7 @@ impl<T: PartialEq> PartialEq for DroppedReceiverError<T> {
 }
 
 impl<T> DroppedReceiverError<T> {
+    #[inline]
     pub fn into_value(self) -> T {
         *self.0
     }
