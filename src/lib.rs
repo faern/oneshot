@@ -103,16 +103,20 @@ impl<T> SyncReceiver<T> {
                 Ordering::SeqCst,
             );
             if state == states::init() {
-                // We stored our thread, now we park until we detect that the sender has replaced
-                // the state. A changed state means the sender set it to a value.
+                // We stored our thread, now we park until the sender has changed the state
                 loop {
                     thread::park();
-                    // Check if the sender replaced our thread instance with the value pointer
-                    let value_ptr = unsafe { &*state_ptr }.load(Ordering::SeqCst);
-                    if value_ptr != thread_ptr as usize {
+                    // Check if the sender updated the state
+                    let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+                    if state != thread_ptr as usize {
+                        // The sender updated the state. It was either dropped or sent something
                         unsafe { Box::from_raw(thread_ptr) };
                         unsafe { Box::from_raw(state_ptr) };
-                        return Ok(unsafe { *Box::from_raw(value_ptr as *mut T) });
+                        if state == states::dropped() {
+                            break Err(DroppedSenderError(()));
+                        } else {
+                            break Ok(unsafe { *Box::from_raw(state as *mut T) });
+                        }
                     }
                 }
             } else if state == states::dropped() {
@@ -261,6 +265,16 @@ mod tests {
             sender.send(9u128).unwrap();
         });
         assert_eq!(receiver.recv(), Ok(9));
+    }
+
+    #[test]
+    fn recv_before_send_then_drop_sender() {
+        let (sender, receiver) = crate::sync_channel::<u128>();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(1));
+            mem::drop(sender);
+        });
+        assert!(receiver.recv().is_err());
     }
 
     #[test]
