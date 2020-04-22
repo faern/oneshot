@@ -2,14 +2,14 @@
 
 #![deny(rust_2018_idioms)]
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-};
+use std::fmt;
 use std::mem;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 pub fn sync_channel<T>() -> (SyncSender<T>, SyncReceiver<T>) {
-    let state = Box::into_raw(Box::new(AtomicUsize::new(0)));
+    // Allocate the state on the heap and initialize it with `new_state()` and get the pointer
+    let state = Box::into_raw(Box::new(AtomicUsize::new(new_state())));
     (
         SyncSender {
             state,
@@ -27,7 +27,6 @@ pub struct SyncSender<T> {
     _marker: std::marker::PhantomData<T>,
 }
 
-
 pub struct SyncReceiver<T> {
     state: *mut AtomicUsize,
     _marker: std::marker::PhantomData<T>,
@@ -38,111 +37,142 @@ unsafe impl<T: Send> Send for SyncReceiver<T> {}
 
 impl<T> SyncSender<T> {
     pub fn send(self, value: T) -> Result<(), T> {
-        let state = self.state;
+        let state_ptr = self.state;
         // Don't run our Drop implementation if we have sent something
         mem::forget(self);
 
-        let data_ptr = Box::into_raw(Box::new(value));
-        match unsafe { &*state }.swap(data_ptr as usize, Ordering::SeqCst) {
-            // The receiver has not started waiting, nor is it dropped
-            0 => Ok(()),
-            // The receiver was already dropped. We are responsible for deallocating state
-            1 => {
-                unsafe { Box::from_raw(state); };
-                Err(unsafe { *Box::from_raw(data_ptr) })
-            },
-            // The receiver has started waiting. Wake it up
-            thread_ptr => {
-                let thread = unsafe { Box::from_raw(thread_ptr as *mut thread::Thread) };
-                thread.unpark();
-                Ok(())
-            }
+        // Put the value on the heap and get the pointer
+        let value_ptr = Box::into_raw(Box::new(value));
+
+        // Store the address to the value in the state and read out what state the receiver is in
+        let state = unsafe { &*state_ptr }.swap(value_ptr as usize, Ordering::SeqCst);
+        if state == new_state() {
+            // The receiver has not started waiting, nor is it dropped. Send done
+            // Receiver frees state and value from heap
+            Ok(())
+        } else if state == dropped_state() {
+            // The receiver was already dropped. We are responsible for freeing the state
+            unsafe { Box::from_raw(state_ptr) };
+            Err(unsafe { *Box::from_raw(value_ptr) })
+        } else {
+            // The receiver has started waiting. Wake it up so it can return the value
+            unsafe { &*(state as *const thread::Thread) }.unpark();
+            Ok(())
         }
     }
 }
 
 impl<T> Drop for SyncSender<T> {
     fn drop(&mut self) {
-        match unsafe { &*self.state }.swap(1, Ordering::SeqCst) {
-            // The receiver has not started waiting, nor is it dropped
-            0 => (),
-            // The receiver was already dropped. We are responsible for deallocating state
-            1 => unsafe { Box::from_raw(self.state); },
+        let state = unsafe { &*self.state }.swap(dropped_state(), Ordering::SeqCst);
+        if state == new_state() {
+            // The receiver has not started waiting, nor is it dropped. Nothing to do
+        } else if state == dropped_state() {
+            // The receiver was already dropped. We are responsible for freeing the state
+            unsafe { Box::from_raw(self.state) };
+        } else {
             // The receiver started waiting. Wake it up so it can detect it has been cancelled
-            thread_ptr => {
-                let thread = unsafe { Box::from_raw(thread_ptr as *mut thread::Thread) };
-                thread.unpark();
-            }
+            unsafe { &*(state as *const thread::Thread) }.unpark();
         }
     }
 }
 
 impl<T> SyncReceiver<T> {
     pub fn recv(self) -> Result<T, Cancelled> {
-        let state = self.state;
+        let state_ptr = self.state;
         // Don't run our Drop implementation if we are receiving
         mem::forget(self);
 
-        match unsafe { &*state }.load(Ordering::SeqCst) {
+        let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+        if state == new_state() {
             // The sender has not sent anything, nor is it dropped
-            0 => {
-                let thread_ptr = Box::into_raw(Box::new(thread::current()));
-                match unsafe { &*state }.compare_and_swap(0, thread_ptr as usize, Ordering::SeqCst) {
-                    // We stored our thread, now we park
-                    0 => loop {
-                        thread::park();
-                        // Check if the sender replaced our thread instance with the `T` pointer
-                        let data_ptr = unsafe { &*state }.load(Ordering::SeqCst);
-                        if data_ptr != thread_ptr as usize {
-                            return Ok(unsafe { *Box::from_raw(data_ptr as *mut T) });
-                        }
-                    },
-                    // The sender was dropped while we prepared to park
-                    1 => {
-                        unsafe { Box::from_raw(thread_ptr); };
-                        unsafe { Box::from_raw(state); };
-                        Err(Cancelled(()))
-                    },
-                    // The sender sent data while we prepared to park, just return it
-                    data_ptr => {
-                        unsafe { Box::from_raw(thread_ptr); };
-                        unsafe { Box::from_raw(state); };
-                        Ok(unsafe { *Box::from_raw(data_ptr as *mut T) })
+            // Put our thread object on the heap. We are always responsible for freeing it
+            let thread_ptr = Box::into_raw(Box::new(thread::current()));
+            let state = unsafe { &*state_ptr }.compare_and_swap(
+                new_state(),
+                thread_ptr as usize,
+                Ordering::SeqCst,
+            );
+            if state == new_state() {
+                // We stored our thread, now we park
+                loop {
+                    thread::park();
+                    // Check if the sender replaced our thread instance with the value pointer
+                    let value_ptr = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+                    if value_ptr != thread_ptr as usize {
+                        unsafe { Box::from_raw(thread_ptr) };
+                        return Ok(unsafe { *Box::from_raw(value_ptr as *mut T) });
                     }
                 }
-            }
-            // The sender was already dropped
-            1 => {
-                unsafe { Box::from_raw(state); };
+            } else if state == dropped_state() {
+                // The sender was dropped while we prepared to park
+                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(state_ptr) };
                 Err(Cancelled(()))
+            } else {
+                // The sender sent data while we prepared to park. We free the state and the value
+                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(state_ptr) };
+                Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
-            // The sender already sent data
-            data_ptr => {
-                unsafe { Box::from_raw(state); };
-                Ok(unsafe { *Box::from_raw(data_ptr as *mut T) })
-            },
+        } else if state == dropped_state() {
+            // The sender was already dropped
+            unsafe { Box::from_raw(state_ptr) };
+            Err(Cancelled(()))
+        } else {
+            // The sender already sent data. We free the state and the value
+            unsafe { Box::from_raw(state_ptr) };
+            Ok(unsafe { *Box::from_raw(state as *mut T) })
         }
     }
 }
 
 impl<T> Drop for SyncReceiver<T> {
     fn drop(&mut self) {
-        match unsafe { &*self.state }.swap(1, Ordering::SeqCst) {
+        let state = unsafe { &*self.state }.swap(dropped_state(), Ordering::SeqCst);
+        if state == new_state() {
             // The sender has not sent anything, nor is it dropped
-            0 => (),
-            // The sender was already dropped. We are responsible for deallocating state
-            1 => unsafe { Box::from_raw(self.state); },
-            // The sender already sent something. We must deallocate it, and our state
-            data_ptr => {
-                unsafe { Box::from_raw(self.state); };
-                unsafe { Box::from_raw(data_ptr as *mut T) };
-            }
+        } else if state == dropped_state() {
+            // The sender was already dropped. We are responsible for freeing the state
+            unsafe { Box::from_raw(self.state) };
+        } else {
+            // The sender already sent something. We must free it, and our state
+            unsafe { Box::from_raw(self.state) };
+            unsafe { Box::from_raw(state as *mut T) };
         }
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Cancelled(());
+
+impl fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "Oneshot sender dropped without sending anything".fmt(f)
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// Returns a memory address in integer form. The value is guaranteed to:
+/// * be the same for every call in the same process
+/// * be different from what `dropped_state` returns
+/// * and never equal a pointer returned from `Box::into_raw`.
+#[inline(always)]
+fn new_state() -> usize {
+    static NEW: u8 = 1u8;
+    &NEW as *const u8 as usize
+}
+
+/// Returns a memory address in integer form. The value is guaranteed to:
+/// * be the same for every call in the same process
+/// * be different from what `new_state` returns
+/// * and never equal a pointer returned from `Box::into_raw`.
+#[inline(always)]
+fn dropped_state() -> usize {
+    static DROPPED: u8 = 2u8;
+    &DROPPED as *const u8 as usize
+}
 
 #[cfg(test)]
 mod tests {
@@ -157,9 +187,9 @@ mod tests {
 
     #[test]
     fn recv_with_dropped_sender() {
-        let (sender, receiver) = crate::sync_channel::<()>();
+        let (sender, receiver) = crate::sync_channel::<u128>();
         mem::drop(sender);
-        assert!(receiver.recv().is_err());
+        receiver.recv().unwrap_err();
     }
 
     #[test]
@@ -174,8 +204,15 @@ mod tests {
         let (sender, receiver) = crate::sync_channel();
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(1));
-            sender.send(3usize).unwrap();
+            sender.send(9u128).unwrap();
         });
-        assert_eq!(receiver.recv(), Ok(3));
+        assert_eq!(receiver.recv(), Ok(9));
+    }
+
+    #[test]
+    fn send_then_drop_receiver() {
+        let (sender, receiver) = crate::sync_channel();
+        assert!(sender.send(19i128).is_ok());
+        mem::drop(receiver);
     }
 }
