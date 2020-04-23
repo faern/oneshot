@@ -7,6 +7,7 @@ use core::mem;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
+/// Creates a new oneshot channel and returns the two endpoints.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     // Allocate the state on the heap and initialize it with `states::init()` and get the pointer.
     // The last endpoint of the channel to be alive is responsible for freeing the state.
@@ -40,8 +41,8 @@ unsafe impl<T: Send> Send for Receiver<T> {}
 
 impl<T> Sender<T> {
     /// Sends `value` over the channel to the [`Receiver`].
-    /// Returns an error if the receiver was dropped before the send took place. The value can
-    /// be extracted from the error again.
+    /// Returns an error if the receiver has already been dropped. The value can
+    /// be extracted from the error.
     pub fn send(self, value: T) -> Result<(), DroppedReceiverError<T>> {
         let state_ptr = self.state;
         // Don't run our Drop implementation if send was called, any cleanup now happens here
@@ -72,9 +73,11 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
+        // Set the channel state to dropped and read what state the receiver was in
         let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
         if state == states::init() {
-            // The receiver has not started waiting, nor is it dropped. Nothing to do
+            // The receiver has not started waiting, nor is it dropped. Nothing to do.
+            // The receiver is responsible for freeing the state.
         } else if state == states::dropped() {
             // The receiver was already dropped. We are responsible for freeing the state
             unsafe { Box::from_raw(self.state) };
@@ -92,9 +95,7 @@ impl<T> Receiver<T> {
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
-            // The sender is alive but has not sent anything yet.
-            // Put our thread object on the heap and in the state so the sender can unpark us.
-            // We are always responsible for freeing the heap allocated thread object.
+            // The sender is alive but has not sent anything yet. We prepare to park.
 
             // Conditionally add a delay here to help the tests trigger the edge cases where
             // the sender manages to be dropped or send something before we are able to store our
@@ -104,7 +105,7 @@ impl<T> Receiver<T> {
 
             // Allocate and put our thread instance on the heap and then store it in the state.
             // The sender will use this to unpark us when it sends or is dropped.
-            // The object taking this thread out of the state is responsible for freeing it.
+            // The actor taking this object out of the state is responsible for freeing it.
             let thread_ptr = Box::into_raw(Box::new(thread::current()));
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
@@ -118,28 +119,30 @@ impl<T> Receiver<T> {
                     // Check if the sender updated the state
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
                     if state == states::dropped() {
-                        // The sender was dropped while we were parked
+                        // The sender was dropped while we were parked.
                         break Err(DroppedSenderError(()));
                     } else if state != thread_ptr as usize {
-                        // The sender sent a value while we parked
-                        unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+                        // The sender sent data while we were parked.
+                        // We take the value and treat the channel as closed.
+                        unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
                         break Ok(unsafe { *Box::from_raw(state as *mut T) });
                     }
                 }
             } else if state == states::dropped() {
-                // The sender was dropped while we prepared to park
+                // The sender was dropped before sending anything while we prepared to park.
                 Err(DroppedSenderError(()))
             } else {
-                // The sender sent data while we prepared to park
-                unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+                // The sender sent data while we prepared to park.
+                // We take the value and treat the channel as closed.
+                unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
         } else if state == states::dropped() {
-            // The sender was already dropped before sending anything
+            // The sender was dropped before sending anything, or we already took the value.
             Err(DroppedSenderError(()))
         } else {
-            // The sender already sent data. We free the state and the value
-            unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+            // The sender already sent a value. We take the value and treat the channel as closed.
+            unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
             Ok(unsafe { *Box::from_raw(state as *mut T) })
         }
     }
@@ -158,11 +161,9 @@ impl<T> Receiver<T> {
             // The sender was already dropped before sending anything.
             Err(DroppedSenderError(()))
         } else {
-            // The sender already sent a value. We take the value and treat ourselves as dropped.
-            // This will make our `Drop` implementation free the state
-            let value = unsafe { *Box::from_raw(state as *mut T) };
-            unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
-            Ok(Some(value))
+            // The sender already sent a value. We take the value and treat the channel as closed.
+            unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
+            Ok(Some(unsafe { *Box::from_raw(state as *mut T) }))
         }
     }
 }
