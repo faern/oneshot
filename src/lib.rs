@@ -7,16 +7,16 @@ use core::mem;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-pub fn sync_channel<T>() -> (SyncSender<T>, SyncReceiver<T>) {
+pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     // Allocate the state on the heap and initialize it with `states::init()` and get the pointer.
     // The last endpoint of the channel to be alive is responsible for freeing the state.
     let state = Box::into_raw(Box::new(AtomicUsize::new(states::init())));
     (
-        SyncSender {
+        Sender {
             state,
             _marker: std::marker::PhantomData,
         },
-        SyncReceiver {
+        Receiver {
             state,
             _marker: std::marker::PhantomData,
         },
@@ -24,21 +24,21 @@ pub fn sync_channel<T>() -> (SyncSender<T>, SyncReceiver<T>) {
 }
 
 #[derive(Debug, Eq, PartialEq, Hash)]
-pub struct SyncSender<T> {
+pub struct Sender<T> {
     state: *mut AtomicUsize,
     _marker: std::marker::PhantomData<T>,
 }
 
 #[derive(Debug, Eq, PartialEq, Hash)]
-pub struct SyncReceiver<T> {
+pub struct Receiver<T> {
     state: *mut AtomicUsize,
     _marker: std::marker::PhantomData<T>,
 }
 
-unsafe impl<T: Send> Send for SyncSender<T> {}
-unsafe impl<T: Send> Send for SyncReceiver<T> {}
+unsafe impl<T: Send> Send for Sender<T> {}
+unsafe impl<T: Send> Send for Receiver<T> {}
 
-impl<T> SyncSender<T> {
+impl<T> Sender<T> {
     /// Sends `value` over the channel to the [`Receiver`].
     /// Returns an error if the receiver was dropped before the send took place. The value can
     /// be extracted from the error again.
@@ -70,7 +70,7 @@ impl<T> SyncSender<T> {
     }
 }
 
-impl<T> Drop for SyncSender<T> {
+impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
         if state == states::init() {
@@ -86,7 +86,7 @@ impl<T> Drop for SyncSender<T> {
     }
 }
 
-impl<T> SyncReceiver<T> {
+impl<T> Receiver<T> {
     pub fn recv(&self) -> Result<T, DroppedSenderError> {
         let state_ptr = self.state;
 
@@ -167,7 +167,7 @@ impl<T> SyncReceiver<T> {
     }
 }
 
-impl<T> Drop for SyncReceiver<T> {
+impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
         if state == states::init() {
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn send_with_dropped_receiver() {
-        let (sender, receiver) = crate::sync_channel();
+        let (sender, receiver) = crate::channel();
         mem::drop(receiver);
         let send_error = sender.send(5u128).unwrap_err();
         assert_eq!(send_error, crate::DroppedReceiverError(Box::new(5)));
@@ -270,21 +270,21 @@ mod tests {
 
     #[test]
     fn recv_with_dropped_sender() {
-        let (sender, receiver) = crate::sync_channel::<u128>();
+        let (sender, receiver) = crate::channel::<u128>();
         mem::drop(sender);
         receiver.recv().unwrap_err();
     }
 
     #[test]
     fn try_recv_with_dropped_sender() {
-        let (sender, receiver) = crate::sync_channel::<u128>();
+        let (sender, receiver) = crate::channel::<u128>();
         mem::drop(sender);
         receiver.try_recv().unwrap_err();
     }
 
     #[test]
     fn send_before_recv() {
-        let (sender, receiver) = crate::sync_channel();
+        let (sender, receiver) = crate::channel();
         assert!(sender.send(19i128).is_ok());
         assert_eq!(receiver.recv(), Ok(19i128));
         assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn send_before_try_recv() {
-        let (sender, receiver) = crate::sync_channel();
+        let (sender, receiver) = crate::channel();
         assert!(sender.send(19i128).is_ok());
         assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
         assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn recv_before_send() {
-        let (sender, receiver) = crate::sync_channel();
+        let (sender, receiver) = crate::channel();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(2));
             sender.send(9u128).unwrap();
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn recv_before_send_then_drop_sender() {
-        let (sender, receiver) = crate::sync_channel::<u128>();
+        let (sender, receiver) = crate::channel::<u128>();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(2));
             mem::drop(sender);
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn send_then_drop_receiver() {
-        let (sender, receiver) = crate::sync_channel();
+        let (sender, receiver) = crate::channel();
         assert!(sender.send(19i128).is_ok());
         mem::drop(receiver);
     }
