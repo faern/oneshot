@@ -86,16 +86,23 @@ impl<T> Drop for SyncSender<T> {
 }
 
 impl<T> SyncReceiver<T> {
-    pub fn recv(self) -> Result<T, DroppedSenderError> {
+    pub fn recv(&self) -> Result<T, DroppedSenderError> {
         let state_ptr = self.state;
-        // Don't run our Drop implementation if we are receiving
-        mem::forget(self);
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
             // The sender is alive but has not sent anything yet.
             // Put our thread object on the heap and in the state so the sender can unpark us.
             // We are always responsible for freeing the heap allocated thread object.
+
+            // Conditionally add a delay here to help the tests trigger the edge cases where
+            // the sender manages to be dropped or send something before we are able to store our
+            // `Thread` object in the state.
+            #[cfg(feature = "test-delay")]
+            thread::sleep(std::time::Duration::from_millis(10));
+
+            // Allocate and put our thread instance on the heap and then store it in the state.
+            // The sender will use this to unpark us when it sends or is dropped
             let thread_ptr = Box::into_raw(Box::new(thread::current()));
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
@@ -111,10 +118,10 @@ impl<T> SyncReceiver<T> {
                     if state != thread_ptr as usize {
                         // The sender updated the state. It was either dropped or sent something
                         unsafe { Box::from_raw(thread_ptr) };
-                        unsafe { Box::from_raw(state_ptr) };
                         if state == states::dropped() {
                             break Err(DroppedSenderError(()));
                         } else {
+                            unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
                             break Ok(unsafe { *Box::from_raw(state as *mut T) });
                         }
                     }
@@ -122,21 +129,19 @@ impl<T> SyncReceiver<T> {
             } else if state == states::dropped() {
                 // The sender was dropped while we prepared to park
                 unsafe { Box::from_raw(thread_ptr) };
-                unsafe { Box::from_raw(state_ptr) };
                 Err(DroppedSenderError(()))
             } else {
                 // The sender sent data while we prepared to park. We free everything
                 unsafe { Box::from_raw(thread_ptr) };
-                unsafe { Box::from_raw(state_ptr) };
+                unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
         } else if state == states::dropped() {
-            // The sender was already dropped before sending anything. We free the state
-            unsafe { Box::from_raw(state_ptr) };
+            // The sender was already dropped before sending anything
             Err(DroppedSenderError(()))
         } else {
             // The sender already sent data. We free the state and the value
-            unsafe { Box::from_raw(state_ptr) };
+            unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
             Ok(unsafe { *Box::from_raw(state as *mut T) })
         }
     }
@@ -284,6 +289,8 @@ mod tests {
         let (sender, receiver) = crate::sync_channel();
         assert!(sender.send(19i128).is_ok());
         assert_eq!(receiver.recv(), Ok(19i128));
+        assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+        assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
     }
 
     #[test]
@@ -299,7 +306,7 @@ mod tests {
     fn recv_before_send() {
         let (sender, receiver) = crate::sync_channel();
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_millis(2));
             sender.send(9u128).unwrap();
         });
         assert_eq!(receiver.recv(), Ok(9));
@@ -309,7 +316,7 @@ mod tests {
     fn recv_before_send_then_drop_sender() {
         let (sender, receiver) = crate::sync_channel::<u128>();
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_millis(2));
             mem::drop(sender);
         });
         assert!(receiver.recv().is_err());

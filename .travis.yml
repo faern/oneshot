@@ -12,6 +12,8 @@ os:
 script:
   - cargo build --verbose
   - cargo test --verbose
+  # Adding an extra delay in some places in the code. Makes the tests hit other edge cases.
+  - cargo test --features test-delay --verbose
   - if [[ "${TRAVIS_RUST_VERSION}" = "stable" && $(uname -s) == "Linux" ]]; then
       rustup component add rustfmt-preview;
       rustfmt --version;
