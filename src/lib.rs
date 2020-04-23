@@ -140,6 +140,28 @@ impl<T> SyncReceiver<T> {
             Ok(unsafe { *Box::from_raw(state as *mut T) })
         }
     }
+
+    /// Checks if there is a value in the channel without blocking. Returns:
+    ///  * `Ok(Some(value))` if there is a value in the channel.
+    ///  * `Ok(None)` if the sender has not yet sent a value.
+    ///  * `Err(_)` if the sender was dropped before sending anything or if the value has already
+    ///    been extracted by previous calls to `try_recv`.
+    pub fn try_recv(&self) -> Result<Option<T>, DroppedSenderError> {
+        let state = unsafe { &*self.state }.load(Ordering::SeqCst);
+        if state == states::init() {
+            // The sender is alive but has not sent anything yet.
+            Ok(None)
+        } else if state == states::dropped() {
+            // The sender was already dropped before sending anything.
+            Err(DroppedSenderError(()))
+        } else {
+            // The sender already sent a value. We take the value and treat ourselves as dropped.
+            // This will make our `Drop` implementation free the state
+            let value = unsafe { *Box::from_raw(state as *mut T) };
+            unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+            Ok(Some(value))
+        }
+    }
 }
 
 impl<T> Drop for SyncReceiver<T> {
@@ -164,7 +186,7 @@ pub struct DroppedSenderError(());
 
 impl fmt::Display for DroppedSenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "Oneshot sender dropped without sending anything".fmt(f)
+        "Oneshot sender dropped without sending anything or value already received".fmt(f)
     }
 }
 
@@ -251,10 +273,26 @@ mod tests {
     }
 
     #[test]
+    fn try_recv_with_dropped_sender() {
+        let (sender, receiver) = crate::sync_channel::<u128>();
+        mem::drop(sender);
+        receiver.try_recv().unwrap_err();
+    }
+
+    #[test]
     fn send_before_recv() {
         let (sender, receiver) = crate::sync_channel();
         assert!(sender.send(19i128).is_ok());
         assert_eq!(receiver.recv(), Ok(19i128));
+    }
+
+    #[test]
+    fn send_before_try_recv() {
+        let (sender, receiver) = crate::sync_channel();
+        assert!(sender.send(19i128).is_ok());
+        assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
+        assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
+        assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
     }
 
     #[test]
