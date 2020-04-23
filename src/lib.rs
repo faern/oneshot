@@ -63,8 +63,8 @@ impl<T> SyncSender<T> {
             Err(DroppedReceiverError(unsafe { Box::from_raw(value_ptr) }))
         } else {
             // The receiver is waiting. Wake it up so it can return the value. The receiver frees
-            // the state, the value and the thread instance in the state
-            unsafe { &*(state as *const thread::Thread) }.unpark();
+            // the state, the value. We free the thread instance in the state
+            unsafe { Box::from_raw(state as *mut thread::Thread) }.unpark();
             Ok(())
         }
     }
@@ -79,8 +79,9 @@ impl<T> Drop for SyncSender<T> {
             // The receiver was already dropped. We are responsible for freeing the state
             unsafe { Box::from_raw(self.state) };
         } else {
-            // The receiver started waiting. Wake it up so it can detect it has been cancelled
-            unsafe { &*(state as *const thread::Thread) }.unpark();
+            // The receiver started waiting. Wake it up so it can detect it has been cancelled.
+            // The receiver frees the state. We free the thread instance in the state
+            unsafe { Box::from_raw(state as *mut thread::Thread) }.unpark();
         }
     }
 }
@@ -102,7 +103,8 @@ impl<T> SyncReceiver<T> {
             thread::sleep(std::time::Duration::from_millis(10));
 
             // Allocate and put our thread instance on the heap and then store it in the state.
-            // The sender will use this to unpark us when it sends or is dropped
+            // The sender will use this to unpark us when it sends or is dropped.
+            // The object taking this thread out of the state is responsible for freeing it.
             let thread_ptr = Box::into_raw(Box::new(thread::current()));
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
@@ -115,24 +117,20 @@ impl<T> SyncReceiver<T> {
                     thread::park();
                     // Check if the sender updated the state
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
-                    if state != thread_ptr as usize {
-                        // The sender updated the state. It was either dropped or sent something
-                        unsafe { Box::from_raw(thread_ptr) };
-                        if state == states::dropped() {
-                            break Err(DroppedSenderError(()));
-                        } else {
-                            unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
-                            break Ok(unsafe { *Box::from_raw(state as *mut T) });
-                        }
+                    if state == states::dropped() {
+                        // The sender was dropped while we were parked
+                        break Err(DroppedSenderError(()));
+                    } else if state != thread_ptr as usize {
+                        // The sender sent a value while we parked
+                        unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+                        break Ok(unsafe { *Box::from_raw(state as *mut T) });
                     }
                 }
             } else if state == states::dropped() {
                 // The sender was dropped while we prepared to park
-                unsafe { Box::from_raw(thread_ptr) };
                 Err(DroppedSenderError(()))
             } else {
-                // The sender sent data while we prepared to park. We free everything
-                unsafe { Box::from_raw(thread_ptr) };
+                // The sender sent data while we prepared to park
                 unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
