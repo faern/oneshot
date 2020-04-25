@@ -58,7 +58,7 @@ impl<T> Sender<T> {
             // The receiver is alive and has not started waiting. Send done
             // Receiver frees state and value from heap
             Ok(())
-        } else if state == states::dropped() {
+        } else if state == states::closed() {
             // The receiver was already dropped. We are responsible for freeing the state and value
             unsafe { Box::from_raw(state_ptr) };
             Err(DroppedReceiverError(unsafe { Box::from_raw(value_ptr) }))
@@ -73,16 +73,16 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        // Set the channel state to dropped and read what state the receiver was in
-        let state = unsafe { &*self.state_ptr }.swap(states::dropped(), Ordering::SeqCst);
+        // Set the channel state to closed and read what state the receiver was in
+        let state = unsafe { &*self.state_ptr }.swap(states::closed(), Ordering::SeqCst);
         if state == states::init() {
             // The receiver has not started waiting, nor is it dropped. Nothing to do.
             // The receiver is responsible for freeing the state.
-        } else if state == states::dropped() {
+        } else if state == states::closed() {
             // The receiver was already dropped. We are responsible for freeing the state
             unsafe { Box::from_raw(self.state_ptr) };
         } else {
-            // The receiver started waiting. Wake it up so it can detect it has been cancelled.
+            // The receiver started waiting. Wake it up so it can detect that the channel closed.
             // The receiver frees the state. We free the thread instance in the state
             unsafe { Box::from_raw(state as *mut thread::Thread) }.unpark();
         }
@@ -118,31 +118,31 @@ impl<T> Receiver<T> {
                     thread::park();
                     // Check if the sender updated the state
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
-                    if state == states::dropped() {
+                    if state == states::closed() {
                         // The sender was dropped while we were parked.
                         break Err(DroppedSenderError(()));
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
-                        unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
+                        unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
                         break Ok(unsafe { *Box::from_raw(state as *mut T) });
                     }
                 }
-            } else if state == states::dropped() {
+            } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
                 Err(DroppedSenderError(()))
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
-                unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
+                unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
-        } else if state == states::dropped() {
+        } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
             Err(DroppedSenderError(()))
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
-            unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
+            unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
             Ok(unsafe { *Box::from_raw(state as *mut T) })
         }
     }
@@ -157,12 +157,12 @@ impl<T> Receiver<T> {
         if state == states::init() {
             // The sender is alive but has not sent anything yet.
             Ok(None)
-        } else if state == states::dropped() {
+        } else if state == states::closed() {
             // The sender was already dropped before sending anything.
             Err(DroppedSenderError(()))
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
-            unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
+            unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
             Ok(Some(unsafe { *Box::from_raw(state as *mut T) }))
         }
     }
@@ -170,11 +170,11 @@ impl<T> Receiver<T> {
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
-        let state = unsafe { &*self.state_ptr }.swap(states::dropped(), Ordering::SeqCst);
+        let state = unsafe { &*self.state_ptr }.swap(states::closed(), Ordering::SeqCst);
         if state == states::init() {
             // The sender has not sent anything, nor is it dropped. The sender is responsible for
             // freeing the state
-        } else if state == states::dropped() {
+        } else if state == states::closed() {
             // The sender was already dropped. We are responsible for freeing the state
             unsafe { Box::from_raw(self.state_ptr) };
         } else {
@@ -228,7 +228,7 @@ impl<T> std::error::Error for DroppedReceiverError<T> {}
 
 mod states {
     static INIT: u8 = 1u8;
-    static DROPPED: u8 = 2u8;
+    static CLOSED: u8 = 2u8;
 
     /// Returns a memory address in integer form representing the initial state of a channel.
     /// This state is active while both the sender and receiver are still alive, no value
@@ -243,16 +243,16 @@ mod states {
         &INIT as *const u8 as usize
     }
 
-    /// Returns a memory address in integer form representing a channel where one or both ends
-    /// have been dropped.
+    /// Returns a memory address in integer form representing a closed channel.
+    /// A channel is closed when one end has been dropped or a sent value has been received.
     ///
     /// The value is guaranteed to:
     /// * be the same for every call in the same process
     /// * be different from what `states::init` returns
     /// * and never equal a pointer returned from `Box::into_raw`.
     #[inline(always)]
-    pub fn dropped() -> usize {
-        &DROPPED as *const u8 as usize
+    pub fn closed() -> usize {
+        &CLOSED as *const u8 as usize
     }
 }
 
