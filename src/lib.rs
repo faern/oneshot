@@ -11,14 +11,14 @@ use std::thread;
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     // Allocate the state on the heap and initialize it with `states::init()` and get the pointer.
     // The last endpoint of the channel to be alive is responsible for freeing the state.
-    let state = Box::into_raw(Box::new(AtomicUsize::new(states::init())));
+    let state_ptr = Box::into_raw(Box::new(AtomicUsize::new(states::init())));
     (
         Sender {
-            state,
+            state_ptr,
             _marker: std::marker::PhantomData,
         },
         Receiver {
-            state,
+            state_ptr,
             _marker: std::marker::PhantomData,
         },
     )
@@ -26,13 +26,13 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 pub struct Sender<T> {
-    state: *mut AtomicUsize,
+    state_ptr: *mut AtomicUsize,
     _marker: std::marker::PhantomData<T>,
 }
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 pub struct Receiver<T> {
-    state: *mut AtomicUsize,
+    state_ptr: *mut AtomicUsize,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -44,7 +44,7 @@ impl<T> Sender<T> {
     /// Returns an error if the receiver has already been dropped. The value can
     /// be extracted from the error.
     pub fn send(self, value: T) -> Result<(), DroppedReceiverError<T>> {
-        let state_ptr = self.state;
+        let state_ptr = self.state_ptr;
         // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
 
@@ -74,13 +74,13 @@ impl<T> Sender<T> {
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         // Set the channel state to dropped and read what state the receiver was in
-        let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+        let state = unsafe { &*self.state_ptr }.swap(states::dropped(), Ordering::SeqCst);
         if state == states::init() {
             // The receiver has not started waiting, nor is it dropped. Nothing to do.
             // The receiver is responsible for freeing the state.
         } else if state == states::dropped() {
             // The receiver was already dropped. We are responsible for freeing the state
-            unsafe { Box::from_raw(self.state) };
+            unsafe { Box::from_raw(self.state_ptr) };
         } else {
             // The receiver started waiting. Wake it up so it can detect it has been cancelled.
             // The receiver frees the state. We free the thread instance in the state
@@ -91,7 +91,7 @@ impl<T> Drop for Sender<T> {
 
 impl<T> Receiver<T> {
     pub fn recv(&self) -> Result<T, DroppedSenderError> {
-        let state_ptr = self.state;
+        let state_ptr = self.state_ptr;
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
@@ -124,7 +124,7 @@ impl<T> Receiver<T> {
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
-                        unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
+                        unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
                         break Ok(unsafe { *Box::from_raw(state as *mut T) });
                     }
                 }
@@ -134,7 +134,7 @@ impl<T> Receiver<T> {
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
-                unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
+                unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
         } else if state == states::dropped() {
@@ -142,7 +142,7 @@ impl<T> Receiver<T> {
             Err(DroppedSenderError(()))
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
-            unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
+            unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
             Ok(unsafe { *Box::from_raw(state as *mut T) })
         }
     }
@@ -153,7 +153,7 @@ impl<T> Receiver<T> {
     ///  * `Err(_)` if the sender was dropped before sending anything or if the value has already
     ///    been extracted by previous calls to `try_recv`.
     pub fn try_recv(&self) -> Result<Option<T>, DroppedSenderError> {
-        let state = unsafe { &*self.state }.load(Ordering::SeqCst);
+        let state = unsafe { &*self.state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
             // The sender is alive but has not sent anything yet.
             Ok(None)
@@ -162,7 +162,7 @@ impl<T> Receiver<T> {
             Err(DroppedSenderError(()))
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
-            unsafe { &*self.state }.store(states::dropped(), Ordering::SeqCst);
+            unsafe { &*self.state_ptr }.store(states::dropped(), Ordering::SeqCst);
             Ok(Some(unsafe { *Box::from_raw(state as *mut T) }))
         }
     }
@@ -170,16 +170,16 @@ impl<T> Receiver<T> {
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
-        let state = unsafe { &*self.state }.swap(states::dropped(), Ordering::SeqCst);
+        let state = unsafe { &*self.state_ptr }.swap(states::dropped(), Ordering::SeqCst);
         if state == states::init() {
             // The sender has not sent anything, nor is it dropped. The sender is responsible for
             // freeing the state
         } else if state == states::dropped() {
             // The sender was already dropped. We are responsible for freeing the state
-            unsafe { Box::from_raw(self.state) };
+            unsafe { Box::from_raw(self.state_ptr) };
         } else {
             // The sender already sent something. We must free it, and our state
-            unsafe { Box::from_raw(self.state) };
+            unsafe { Box::from_raw(self.state_ptr) };
             unsafe { Box::from_raw(state as *mut T) };
         }
     }
