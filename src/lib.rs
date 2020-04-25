@@ -288,6 +288,37 @@ mod tests {
     }
 
     #[test]
+    fn send_before_recv() {
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            assert!(sender.send(19i128).is_ok());
+            assert_eq!(receiver.recv(), Ok(19i128));
+            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
+        })
+    }
+
+    #[test]
+    fn send_before_try_recv() {
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            assert!(sender.send(19i128).is_ok());
+            assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
+            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
+            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+        })
+    }
+
+    #[test]
+    fn send_then_drop_receiver() {
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            assert!(sender.send(19i128).is_ok());
+            mem::drop(receiver);
+        })
+    }
+
+    #[test]
     fn send_with_dropped_receiver() {
         maybe_loom_model(|| {
             let (sender, receiver) = crate::channel();
@@ -317,28 +348,6 @@ mod tests {
     }
 
     #[test]
-    fn send_before_recv() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-            assert_eq!(receiver.recv(), Ok(19i128));
-            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
-            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
-        })
-    }
-
-    #[test]
-    fn send_before_try_recv() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-            assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
-            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
-            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
-        })
-    }
-
-    #[test]
     fn recv_before_send() {
         maybe_loom_model(|| {
             let (sender, receiver) = crate::channel();
@@ -359,15 +368,6 @@ mod tests {
                 mem::drop(sender);
             });
             assert!(receiver.recv().is_err());
-        })
-    }
-
-    #[test]
-    fn send_then_drop_receiver() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-            mem::drop(receiver);
         })
     }
 }
