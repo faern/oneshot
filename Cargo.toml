@@ -14,6 +14,11 @@ edition = "2018"
 
 [dev-dependencies]
 loom = "0.3.2"
+criterion = "0.3"
 
 [features]
 test-delay = []
+
+[[bench]]
+name = "benches"
+harness = false
