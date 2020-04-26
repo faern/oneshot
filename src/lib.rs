@@ -121,7 +121,71 @@ impl<T> Receiver<T> {
     ///
     /// If a sent value has already been extracted from this channel this method will return an
     /// error.
-    pub fn recv(&self) -> Result<T, DroppedSenderError> {
+    pub fn recv(self) -> Result<T, DroppedSenderError> {
+        let state_ptr = self.state_ptr;
+        // Don't run our Drop implementation if we are receiving
+        mem::forget(self);
+
+        let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+        if state == states::init() {
+            // The sender is alive but has not sent anything yet. We prepare to park.
+
+            // Conditionally add a delay here to help the tests trigger the edge cases where
+            // the sender manages to be dropped or send something before we are able to store our
+            // `Thread` object in the state.
+            #[cfg(feature = "test-delay")]
+            std::thread::sleep(std::time::Duration::from_millis(10));
+
+            // Allocate and put our thread instance on the heap and then store it in the state.
+            // The sender will use this to unpark us when it sends or is dropped.
+            // The actor taking this object out of the state is responsible for freeing it.
+            let thread_ptr = Box::into_raw(Box::new(thread::current()));
+            let state = unsafe { &*state_ptr }.compare_and_swap(
+                states::init(),
+                thread_ptr as usize,
+                Ordering::SeqCst,
+            );
+            if state == states::init() {
+                // We stored our thread, now we park until the sender has changed the state
+                loop {
+                    thread::park();
+                    // Check if the sender updated the state
+                    let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+                    if state == states::closed() {
+                        // The sender was dropped while we were parked.
+                        unsafe { Box::from_raw(state_ptr) };
+                        break Err(DroppedSenderError(()));
+                    } else if state != thread_ptr as usize {
+                        // The sender sent data while we were parked.
+                        // We take the value and free the state.
+                        unsafe { Box::from_raw(state_ptr) };
+                        break Ok(unsafe { *Box::from_raw(state as *mut T) });
+                    }
+                }
+            } else if state == states::closed() {
+                // The sender was dropped before sending anything while we prepared to park.
+                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(state_ptr) };
+                Err(DroppedSenderError(()))
+            } else {
+                // The sender sent data while we prepared to park.
+                // We take the value and free the state.
+                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(state_ptr) };
+                Ok(unsafe { *Box::from_raw(state as *mut T) })
+            }
+        } else if state == states::closed() {
+            // The sender was dropped before sending anything, or we already took the value.
+            unsafe { Box::from_raw(state_ptr) };
+            Err(DroppedSenderError(()))
+        } else {
+            // The sender already sent a value. We take the value and free the state.
+            unsafe { Box::from_raw(state_ptr) };
+            Ok(unsafe { *Box::from_raw(state as *mut T) })
+        }
+    }
+
+    pub fn recv_ref(&self) -> Result<T, DroppedSenderError> {
         let state_ptr = self.state_ptr;
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
@@ -208,7 +272,7 @@ impl<T> Receiver<T> {
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<T>, DroppedSenderError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self.recv_deadline(deadline),
-            None => self.recv().map(Some),
+            None => self.recv_ref().map(Some),
         }
     }
 
@@ -409,15 +473,24 @@ mod tests {
     }
 
     #[test]
-    fn send_before_recv() {
+    fn send_before_recv_ref() {
         maybe_loom_model(|| {
             let (sender, receiver) = crate::channel();
             assert!(sender.send(19i128).is_ok());
 
-            assert_eq!(receiver.recv(), Ok(19i128));
-            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+            assert_eq!(receiver.recv_ref(), Ok(19i128));
+            assert_eq!(receiver.recv_ref(), Err(crate::DroppedSenderError(())));
             assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
             assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
+        })
+    }
+
+    #[test]
+    fn send_before_recv() {
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            assert!(sender.send(19i128).is_ok());
+            assert_eq!(receiver.recv(), Ok(19i128));
         })
     }
 
@@ -429,7 +502,7 @@ mod tests {
 
             assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
             assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
-            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+            assert_eq!(receiver.recv_ref(), Err(crate::DroppedSenderError(())));
             assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
         })
     }
