@@ -11,9 +11,12 @@ categories = ["asynchronous", "concurrency"]
 edition = "2018"
 
 [dependencies]
+# Optional loom dependency. Activate to make this library use the loom primitives.
+# Only useful when testing this library or if you depend on this library and need to run loom tests
+# on your library.
+loom = { version = "0.3.2", optional = true}
 
 [dev-dependencies]
-loom = "0.3.2"
 criterion = "0.3"
 
 [[bench]]

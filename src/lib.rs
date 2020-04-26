@@ -4,21 +4,21 @@
 
 use core::fmt;
 use core::mem;
-#[cfg(not(all(loom, test)))]
+#[cfg(not(feature = "loom"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(all(loom, test))]
+#[cfg(feature = "loom")]
 use loom::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 mod thread {
     pub use std::thread::{current, Thread};
 
-    #[cfg(all(loom, test))]
+    #[cfg(feature = "loom")]
     pub use loom::thread::yield_now as park;
-    #[cfg(not(all(loom, test)))]
+    #[cfg(not(feature = "loom"))]
     pub use std::thread::{park, park_timeout};
 
-    #[cfg(all(loom, test))]
+    #[cfg(feature = "loom")]
     pub fn park_timeout(_timeout: std::time::Duration) {
         loom::thread::yield_now()
     }
@@ -154,7 +154,7 @@ impl<T> Receiver<T> {
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
                         unsafe { Box::from_raw(state_ptr) };
-                        break Err(DroppedSenderError(()));
+                        break Err(DroppedSenderError);
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and free the state.
@@ -166,7 +166,7 @@ impl<T> Receiver<T> {
                 // The sender was dropped before sending anything while we prepared to park.
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
-                Err(DroppedSenderError(()))
+                Err(DroppedSenderError)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and free the state.
@@ -177,7 +177,7 @@ impl<T> Receiver<T> {
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
             unsafe { Box::from_raw(state_ptr) };
-            Err(DroppedSenderError(()))
+            Err(DroppedSenderError)
         } else {
             // The sender already sent a value. We take the value and free the state.
             unsafe { Box::from_raw(state_ptr) };
@@ -215,7 +215,7 @@ impl<T> Receiver<T> {
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
-                        break Err(DroppedSenderError(()));
+                        break Err(DroppedSenderError);
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
@@ -226,7 +226,7 @@ impl<T> Receiver<T> {
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
                 unsafe { Box::from_raw(thread_ptr) };
-                Err(DroppedSenderError(()))
+                Err(DroppedSenderError)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
@@ -236,7 +236,7 @@ impl<T> Receiver<T> {
             }
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
-            Err(DroppedSenderError(()))
+            Err(DroppedSenderError)
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
@@ -256,7 +256,7 @@ impl<T> Receiver<T> {
             Ok(None)
         } else if state == states::closed() {
             // The sender was already dropped before sending anything.
-            Err(DroppedSenderError(()))
+            Err(DroppedSenderError)
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
@@ -319,7 +319,7 @@ impl<T> Receiver<T> {
                         } else if state == states::closed() {
                             // The sender was dropped while we were parked.
                             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                            break Err(DroppedSenderError(()));
+                            break Err(DroppedSenderError);
                         } else {
                             // The sender sent data while we were parked.
                             // We take the value and treat the channel as closed.
@@ -331,7 +331,7 @@ impl<T> Receiver<T> {
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
-                        break Err(DroppedSenderError(()));
+                        break Err(DroppedSenderError);
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
@@ -342,7 +342,7 @@ impl<T> Receiver<T> {
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
                 unsafe { Box::from_raw(thread_ptr) };
-                Err(DroppedSenderError(()))
+                Err(DroppedSenderError)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
@@ -352,7 +352,7 @@ impl<T> Receiver<T> {
             }
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
-            Err(DroppedSenderError(()))
+            Err(DroppedSenderError)
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
@@ -379,7 +379,7 @@ impl<T> Drop for Receiver<T> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct DroppedSenderError(());
+pub struct DroppedSenderError;
 
 impl fmt::Display for DroppedSenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -446,210 +446,5 @@ mod states {
     #[inline(always)]
     pub fn closed() -> usize {
         &CLOSED as *const u8 as usize
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        mem,
-        time::{Duration, Instant},
-    };
-
-    mod thread {
-        pub use std::thread::sleep;
-
-        #[cfg(loom)]
-        pub use loom::thread::spawn;
-        #[cfg(not(loom))]
-        pub use std::thread::spawn;
-    }
-
-    fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
-        #[cfg(loom)]
-        loom::model(test);
-        #[cfg(not(loom))]
-        test();
-    }
-
-    #[test]
-    fn send_before_recv_ref() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-
-            assert_eq!(receiver.recv_ref(), Ok(19i128));
-            assert_eq!(receiver.recv_ref(), Err(crate::DroppedSenderError(())));
-            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
-            assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
-        })
-    }
-
-    #[test]
-    fn send_before_recv() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-            assert_eq!(receiver.recv(), Ok(19i128));
-        })
-    }
-
-    #[test]
-    fn send_before_try_recv() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-
-            assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
-            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
-            assert_eq!(receiver.recv_ref(), Err(crate::DroppedSenderError(())));
-            assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
-        })
-    }
-
-    #[test]
-    fn send_before_recv_timeout() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-
-            let start = Instant::now();
-            let timeout = Duration::from_secs(1);
-            assert_eq!(receiver.recv_timeout(timeout), Ok(Some(19i128)));
-            assert!(start.elapsed() < Duration::from_millis(100));
-
-            assert!(receiver.recv_timeout(timeout).is_err());
-            assert!(receiver.try_recv().is_err());
-            assert!(receiver.recv().is_err());
-        })
-    }
-
-    #[test]
-    fn send_then_drop_receiver() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            assert!(sender.send(19i128).is_ok());
-            mem::drop(receiver);
-        })
-    }
-
-    #[test]
-    fn send_with_dropped_receiver() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            mem::drop(receiver);
-            let send_error = sender.send(5u128).unwrap_err();
-            assert_eq!(send_error, crate::DroppedReceiverError(Box::new(5)));
-            assert_eq!(send_error.into_value(), 5);
-        })
-    }
-
-    #[test]
-    fn recv_with_dropped_sender() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel::<u128>();
-            mem::drop(sender);
-            receiver.recv().unwrap_err();
-        })
-    }
-
-    #[test]
-    fn try_recv_with_dropped_sender() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel::<u128>();
-            mem::drop(sender);
-            receiver.try_recv().unwrap_err();
-        })
-    }
-
-    #[test]
-    fn recv_before_send() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(2));
-                sender.send(9u128).unwrap();
-            });
-            assert_eq!(receiver.recv(), Ok(9));
-        })
-    }
-
-    #[test]
-    fn recv_timeout_before_send() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(2));
-                sender.send(9u128).unwrap();
-            });
-            assert_eq!(receiver.recv_timeout(Duration::from_secs(1)), Ok(Some(9)));
-        })
-    }
-
-    #[test]
-    fn recv_before_send_then_drop_sender() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel::<u128>();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(10));
-                mem::drop(sender);
-            });
-            assert!(receiver.recv().is_err());
-        })
-    }
-
-    #[test]
-    fn recv_timeout_before_send_then_drop_sender() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel::<u128>();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(10));
-                mem::drop(sender);
-            });
-            assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
-        })
-    }
-
-    #[test]
-    fn try_recv() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel::<u128>();
-            assert_eq!(receiver.try_recv(), Ok(None));
-            mem::drop(sender)
-        })
-    }
-
-    #[test]
-    fn recv_deadline_and_timeout_no_time() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel::<u128>();
-
-            let start = Instant::now();
-            assert_eq!(receiver.recv_deadline(start), Ok(None));
-            assert_eq!(receiver.recv_timeout(Duration::from_millis(0)), Ok(None));
-            assert!(start.elapsed() < Duration::from_millis(100));
-
-            mem::drop(sender)
-        })
-    }
-
-    #[test]
-    fn recv_deadline_and_timeout_time_should_elapse() {
-        maybe_loom_model(|| {
-            let (sender, receiver) = crate::channel::<u128>();
-
-            let start = Instant::now();
-            let timeout = Duration::from_millis(100);
-            assert_eq!(receiver.recv_deadline(start + timeout), Ok(None));
-            assert!(start.elapsed() > timeout);
-            assert!(start.elapsed() < timeout * 2);
-
-            let start = Instant::now();
-            assert_eq!(receiver.recv_timeout(timeout), Ok(None));
-            assert!(start.elapsed() > timeout);
-            assert!(start.elapsed() < timeout * 2);
-
-            mem::drop(sender)
-        })
     }
 }

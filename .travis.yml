@@ -14,7 +14,7 @@ script:
   - cargo test
   # Adding an extra delay in some places in the code. Makes the tests hit other edge cases.
   - RUSTFLAGS="--cfg oneshot_test_delay" cargo test
-  - LOOM_MAX_BRANCHES=100000 LOOM_LOG=1 RUSTFLAGS="--cfg loom" cargo test
+  - LOOM_MAX_BRANCHES=100000 LOOM_LOG=1 cargo test --features loom
   - if [[ $(uname -s) == "Linux" ]]; then
       cargo install cargo-valgrind;
       ./check_mem_leaks.sh;
