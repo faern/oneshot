@@ -24,6 +24,11 @@ mod thread {
     }
 }
 
+#[cfg(feature = "loom")]
+mod loombox;
+#[cfg(feature = "loom")]
+use loombox::Box;
+
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     // Allocate the state on the heap and initialize it with `states::init()` and get the pointer.
@@ -159,7 +164,7 @@ impl<T> Receiver<T> {
                         // The sender sent data while we were parked.
                         // We take the value and free the state.
                         unsafe { Box::from_raw(state_ptr) };
-                        break Ok(unsafe { *Box::from_raw(state as *mut T) });
+                        break Ok(take(unsafe { Box::from_raw(state as *mut T) }));
                     }
                 }
             } else if state == states::closed() {
@@ -172,7 +177,7 @@ impl<T> Receiver<T> {
                 // We take the value and free the state.
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
-                Ok(unsafe { *Box::from_raw(state as *mut T) })
+                Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
@@ -181,7 +186,7 @@ impl<T> Receiver<T> {
         } else {
             // The sender already sent a value. We take the value and free the state.
             unsafe { Box::from_raw(state_ptr) };
-            Ok(unsafe { *Box::from_raw(state as *mut T) })
+            Ok(take(unsafe { Box::from_raw(state as *mut T) }))
         }
     }
 
@@ -220,7 +225,7 @@ impl<T> Receiver<T> {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
                         unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                        break Ok(unsafe { *Box::from_raw(state as *mut T) });
+                        break Ok(take(unsafe { Box::from_raw(state as *mut T) }));
                     }
                 }
             } else if state == states::closed() {
@@ -232,7 +237,7 @@ impl<T> Receiver<T> {
                 // We take the value and treat the channel as closed.
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                Ok(unsafe { *Box::from_raw(state as *mut T) })
+                Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
@@ -240,7 +245,7 @@ impl<T> Receiver<T> {
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-            Ok(unsafe { *Box::from_raw(state as *mut T) })
+            Ok(take(unsafe { Box::from_raw(state as *mut T) }))
         }
     }
 
@@ -260,7 +265,7 @@ impl<T> Receiver<T> {
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
-            Ok(Some(unsafe { *Box::from_raw(state as *mut T) }))
+            Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })))
         }
     }
 
@@ -324,7 +329,7 @@ impl<T> Receiver<T> {
                             // The sender sent data while we were parked.
                             // We take the value and treat the channel as closed.
                             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                            break Ok(Some(unsafe { *Box::from_raw(state as *mut T) }));
+                            break Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })));
                         }
                     }
                     // Check if the sender updated the state
@@ -336,7 +341,7 @@ impl<T> Receiver<T> {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
                         unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                        break Ok(Some(unsafe { *Box::from_raw(state as *mut T) }));
+                        break Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })));
                     }
                 }
             } else if state == states::closed() {
@@ -348,7 +353,7 @@ impl<T> Receiver<T> {
                 // We take the value and treat the channel as closed.
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                Ok(Some(unsafe { *Box::from_raw(state as *mut T) }))
+                Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })))
             }
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
@@ -356,7 +361,7 @@ impl<T> Receiver<T> {
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-            Ok(Some(unsafe { *Box::from_raw(state as *mut T) }))
+            Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })))
         }
     }
 }
@@ -401,7 +406,7 @@ impl<T: PartialEq> PartialEq for DroppedReceiverError<T> {
 impl<T> DroppedReceiverError<T> {
     #[inline]
     pub fn into_value(self) -> T {
-        *self.0
+        take(self.0)
     }
 }
 
@@ -446,5 +451,20 @@ mod states {
     #[inline(always)]
     pub fn closed() -> usize {
         &CLOSED as *const u8 as usize
+    }
+}
+
+/// Consumes a box and returns the value within on the stack. A workaround since custom box
+/// implementations can't implement this the same way as the standard library box does.
+#[allow(clippy::boxed_local)]
+#[inline(always)]
+fn take<T>(b: Box<T>) -> T {
+    #[cfg(not(feature = "loom"))]
+    {
+        *b
+    }
+    #[cfg(feature = "loom")]
+    {
+        b.into_value()
     }
 }
