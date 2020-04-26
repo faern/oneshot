@@ -1,4 +1,4 @@
-use oneshot::TryRecvError;
+use oneshot::{RecvTimeoutError, TryRecvError};
 use std::{
     mem,
     time::{Duration, Instant},
@@ -63,7 +63,7 @@ fn send_before_recv_timeout() {
 
         let start = Instant::now();
         let timeout = Duration::from_secs(1);
-        assert_eq!(receiver.recv_timeout(timeout), Ok(Some(19i128)));
+        assert_eq!(receiver.recv_timeout(timeout), Ok(19i128));
         assert!(start.elapsed() < Duration::from_millis(100));
 
         assert!(receiver.recv_timeout(timeout).is_err());
@@ -131,7 +131,7 @@ fn recv_timeout_before_send() {
             thread::sleep(Duration::from_millis(2));
             sender.send(9u128).unwrap();
         });
-        assert_eq!(receiver.recv_timeout(Duration::from_secs(1)), Ok(Some(9)));
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(1)), Ok(9));
         t.join().unwrap();
     })
 }
@@ -177,11 +177,17 @@ fn recv_deadline_and_timeout_no_time() {
         let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
-        assert_eq!(receiver.recv_deadline(start), Ok(None));
+        assert_eq!(
+            receiver.recv_deadline(start),
+            Err(RecvTimeoutError::Timeout)
+        );
         assert!(start.elapsed() < Duration::from_millis(200));
 
         let start = Instant::now();
-        assert_eq!(receiver.recv_timeout(Duration::from_millis(0)), Ok(None));
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(0)),
+            Err(RecvTimeoutError::Timeout)
+        );
         assert!(start.elapsed() < Duration::from_millis(200));
     })
 }
@@ -193,12 +199,18 @@ fn recv_deadline_and_timeout_time_should_elapse() {
 
         let start = Instant::now();
         let timeout = Duration::from_millis(100);
-        assert_eq!(receiver.recv_deadline(start + timeout), Ok(None));
+        assert_eq!(
+            receiver.recv_deadline(start + timeout),
+            Err(RecvTimeoutError::Timeout)
+        );
         assert!(start.elapsed() > timeout);
         assert!(start.elapsed() < timeout * 3);
 
         let start = Instant::now();
-        assert_eq!(receiver.recv_timeout(timeout), Ok(None));
+        assert_eq!(
+            receiver.recv_timeout(timeout),
+            Err(RecvTimeoutError::Timeout)
+        );
         assert!(start.elapsed() > timeout);
         assert!(start.elapsed() < timeout * 3);
     })

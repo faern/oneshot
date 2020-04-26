@@ -73,3 +73,26 @@ impl fmt::Display for TryRecvError {
 }
 
 impl std::error::Error for TryRecvError {}
+
+/// An error returned when trying a time limited blocking receive on a [`Receiver`].
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum RecvTimeoutError {
+    /// No message arrived on the channel before the timeout was reached. The channel is still open.
+    Timeout,
+
+    /// The channel is closed. Either the sender was dropped before sending any message, or the
+    /// message has already been extracted from the receiver.
+    Disconnected,
+}
+
+impl fmt::Display for RecvTimeoutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let msg = match self {
+            RecvTimeoutError::Timeout => "timed out waiting on channel",
+            RecvTimeoutError::Disconnected => "channel is empty and sending half is closed",
+        };
+        msg.fmt(f)
+    }
+}
+
+impl std::error::Error for RecvTimeoutError {}

@@ -31,7 +31,7 @@ use loombox::Box;
 use std::boxed::Box;
 
 mod errors;
-pub use errors::{DroppedSenderError, SendError, TryRecvError};
+pub use errors::{DroppedSenderError, RecvTimeoutError, SendError, TryRecvError};
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -274,23 +274,23 @@ impl<T> Receiver<T> {
     }
 
     /// Like [`Receiver::recv`], but will not block longer than `timeout`. Returns:
-    ///  * `Ok(Some(value))` if there is a value in the channel before `timeout` elapses.
-    ///  * `Ok(None)` if there is no value in the channel before `timeout` elapses.
-    ///  * `Err` if the sender was dropped before sending anything or if the value has already
-    ///    been extracted by previous receive calls.
-    pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<T>, DroppedSenderError> {
+    ///  * `Ok(message)` if there was a message in the channel before the timeout was reached.
+    ///  * `Err(Timeout)` if no message arrived on the channel before the timeout was reached.
+    ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
+    ///    has already been extracted by a previous receive call.
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self.recv_deadline(deadline),
-            None => self.recv_ref().map(Some),
+            None => self.recv_ref().map_err(|_| RecvTimeoutError::Disconnected),
         }
     }
 
     /// Like [`Receiver::recv`], but will not block longer than until `deadline`. Returns:
-    ///  * `Ok(Some(value))` if there is a value in the channel before `instant`.
-    ///  * `Ok(None)` if there is no value in the channel before `instant`.
-    ///  * `Err` if the sender was dropped before sending anything or if the value has already
-    ///    been extracted by previous receive calls.
-    pub fn recv_deadline(&self, deadline: Instant) -> Result<Option<T>, DroppedSenderError> {
+    ///  * `Ok(message)` if there was a message in the channel before the deadline was reached.
+    ///  * `Err(Timeout)` if no message arrived on the channel before the deadline was reached.
+    ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
+    ///    has already been extracted by a previous receive call.
+    pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         let state_ptr = self.state_ptr;
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
@@ -324,48 +324,48 @@ impl<T> Receiver<T> {
                         if state == thread_ptr as usize {
                             // The sender has not touched the state. We took out the thread object.
                             unsafe { Box::from_raw(thread_ptr) };
-                            break Ok(None);
+                            break Err(RecvTimeoutError::Timeout);
                         } else if state == states::closed() {
                             // The sender was dropped while we were parked.
                             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                            break Err(DroppedSenderError);
+                            break Err(RecvTimeoutError::Disconnected);
                         } else {
                             // The sender sent data while we were parked.
                             // We take the value and treat the channel as closed.
                             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                            break Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })));
+                            break Ok(take(unsafe { Box::from_raw(state as *mut T) }));
                         }
                     }
                     // Check if the sender updated the state
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
-                        break Err(DroppedSenderError);
+                        break Err(RecvTimeoutError::Disconnected);
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
                         unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                        break Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })));
+                        break Ok(take(unsafe { Box::from_raw(state as *mut T) }));
                     }
                 }
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
                 unsafe { Box::from_raw(thread_ptr) };
-                Err(DroppedSenderError)
+                Err(RecvTimeoutError::Disconnected)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-                Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })))
+                Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
-            Err(DroppedSenderError)
+            Err(RecvTimeoutError::Disconnected)
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
-            Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })))
+            Ok(take(unsafe { Box::from_raw(state as *mut T) }))
         }
     }
 }
