@@ -24,7 +24,7 @@ mod thread {
     }
 }
 
-/// Creates a new oneshot channel and returns the two endpoints.
+/// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     // Allocate the state on the heap and initialize it with `states::init()` and get the pointer.
     // The last endpoint of the channel to be alive is responsible for freeing the state.
@@ -107,6 +107,20 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
+    /// Attempts to wait for a value from the [`Sender`], returning an error if the channel is
+    /// closed.
+    ///
+    /// This method will always block the current thread if there is no data available and it's
+    /// still possible for the value to be sent. Once the value is sent to the corresponding
+    /// [`Sender`], then this receiver will wake up and return that message.
+    ///
+    /// If the corresponding [`Sender`] has disconnected (been dropped), or it disconnects while
+    /// this call is blocking, this call will wake up and return Err to indicate that the value
+    /// can never be received on this channel. However, since channels are buffered, if the value is
+    /// sent before the disconnect, it will still be properly received.
+    ///
+    /// If a sent value has already been extracted from this channel this method will return an
+    /// error.
     pub fn recv(&self) -> Result<T, DroppedSenderError> {
         let state_ptr = self.state_ptr;
 
@@ -166,9 +180,9 @@ impl<T> Receiver<T> {
 
     /// Checks if there is a value in the channel without blocking. Returns:
     ///  * `Ok(Some(value))` if there is a value in the channel.
-    ///  * `Ok(None)` if the sender has not yet sent a value.
-    ///  * `Err(_)` if the sender was dropped before sending anything or if the value has already
-    ///    been extracted by previous calls to `try_recv`.
+    ///  * `Ok(None)` if the sender has not yet sent a value but the channel is still open.
+    ///  * `Err` if the sender was dropped before sending anything or if the value has already
+    ///    been extracted by previous receive calls.
     pub fn try_recv(&self) -> Result<Option<T>, DroppedSenderError> {
         let state = unsafe { &*self.state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
@@ -184,6 +198,11 @@ impl<T> Receiver<T> {
         }
     }
 
+    /// Like [`Receiver::recv`], but will not block longer than `timeout`. Returns:
+    ///  * `Ok(Some(value))` if there is a value in the channel before `timeout` elapses.
+    ///  * `Ok(None)` if there is no value in the channel before `timeout` elapses.
+    ///  * `Err` if the sender was dropped before sending anything or if the value has already
+    ///    been extracted by previous receive calls.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<T>, DroppedSenderError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self.recv_deadline(deadline),
@@ -191,6 +210,11 @@ impl<T> Receiver<T> {
         }
     }
 
+    /// Like [`Receiver::recv`], but will not block longer than until `deadline`. Returns:
+    ///  * `Ok(Some(value))` if there is a value in the channel before `instant`.
+    ///  * `Ok(None)` if there is no value in the channel before `instant`.
+    ///  * `Err` if the sender was dropped before sending anything or if the value has already
+    ///    been extracted by previous receive calls.
     pub fn recv_deadline(&self, deadline: Instant) -> Result<Option<T>, DroppedSenderError> {
         let state_ptr = self.state_ptr;
 
