@@ -31,7 +31,7 @@ use loombox::Box;
 use std::boxed::Box;
 
 mod errors;
-pub use errors::{DroppedSenderError, RecvTimeoutError, SendError, TryRecvError};
+pub use errors::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -130,7 +130,7 @@ impl<T> Receiver<T> {
     ///
     /// If a sent value has already been extracted from this channel this method will return an
     /// error.
-    pub fn recv(self) -> Result<T, DroppedSenderError> {
+    pub fn recv(self) -> Result<T, RecvError> {
         let state_ptr = self.state_ptr;
         // Don't run our Drop implementation if we are receiving
         mem::forget(self);
@@ -163,7 +163,7 @@ impl<T> Receiver<T> {
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
                         unsafe { Box::from_raw(state_ptr) };
-                        break Err(DroppedSenderError);
+                        break Err(RecvError);
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and free the state.
@@ -175,7 +175,7 @@ impl<T> Receiver<T> {
                 // The sender was dropped before sending anything while we prepared to park.
                 unsafe { Box::from_raw(thread_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
-                Err(DroppedSenderError)
+                Err(RecvError)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and free the state.
@@ -186,7 +186,7 @@ impl<T> Receiver<T> {
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
             unsafe { Box::from_raw(state_ptr) };
-            Err(DroppedSenderError)
+            Err(RecvError)
         } else {
             // The sender already sent a value. We take the value and free the state.
             unsafe { Box::from_raw(state_ptr) };
@@ -194,7 +194,7 @@ impl<T> Receiver<T> {
         }
     }
 
-    pub fn recv_ref(&self) -> Result<T, DroppedSenderError> {
+    pub fn recv_ref(&self) -> Result<T, RecvError> {
         let state_ptr = self.state_ptr;
 
         let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
@@ -224,7 +224,7 @@ impl<T> Receiver<T> {
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
-                        break Err(DroppedSenderError);
+                        break Err(RecvError);
                     } else if state != thread_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
@@ -235,7 +235,7 @@ impl<T> Receiver<T> {
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
                 unsafe { Box::from_raw(thread_ptr) };
-                Err(DroppedSenderError)
+                Err(RecvError)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
@@ -245,7 +245,7 @@ impl<T> Receiver<T> {
             }
         } else if state == states::closed() {
             // The sender was dropped before sending anything, or we already took the value.
-            Err(DroppedSenderError)
+            Err(RecvError)
         } else {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);

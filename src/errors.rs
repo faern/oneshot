@@ -1,17 +1,6 @@
 use super::Box;
 use core::fmt;
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct DroppedSenderError;
-
-impl fmt::Display for DroppedSenderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "Oneshot sender dropped without sending anything, or message already received".fmt(f)
-    }
-}
-
-impl std::error::Error for DroppedSenderError {}
-
 /// An error returned when trying to send on a closed channel. Returned from
 /// [`Sender::send`] if the corresponding [`Receiver`] has already been dropped.
 ///
@@ -39,7 +28,7 @@ impl<T> SendError<T> {
 
 impl<T> fmt::Display for SendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "oneshot receiver has already been dropped".fmt(f)
+        "sending on a closed channel".fmt(f)
     }
 }
 
@@ -50,6 +39,21 @@ impl<T> fmt::Debug for SendError<T> {
 }
 
 impl<T> std::error::Error for SendError<T> {}
+
+/// An error returned from the indefinitely blocking recv functions on a [`Receiver`].
+///
+/// The recv operation can only fail if the corresponding [`Sender`] was dropped before sending
+/// any message. Or if a message has already been sent and received on the channel.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct RecvError;
+
+impl fmt::Display for RecvError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "receiving on a closed channel".fmt(f)
+    }
+}
+
+impl std::error::Error for RecvError {}
 
 /// An error returned when trying a non blocking receive on a [`Receiver`].
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

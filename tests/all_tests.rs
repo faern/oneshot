@@ -1,4 +1,4 @@
-use oneshot::{RecvTimeoutError, TryRecvError};
+use oneshot::{RecvError, RecvTimeoutError, TryRecvError};
 use std::{
     mem,
     time::{Duration, Instant},
@@ -27,7 +27,7 @@ fn send_before_recv_ref() {
         assert!(sender.send(19i128).is_ok());
 
         assert_eq!(receiver.recv_ref(), Ok(19i128));
-        assert_eq!(receiver.recv_ref(), Err(oneshot::DroppedSenderError));
+        assert_eq!(receiver.recv_ref(), Err(RecvError));
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
         assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
     })
@@ -50,7 +50,7 @@ fn send_before_try_recv() {
 
         assert_eq!(receiver.try_recv(), Ok(19i128));
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
-        assert_eq!(receiver.recv_ref(), Err(oneshot::DroppedSenderError));
+        assert_eq!(receiver.recv_ref(), Err(RecvError));
         assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
     })
 }
