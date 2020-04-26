@@ -8,6 +8,6 @@ fn main() {
         thread::sleep(Duration::from_millis(2));
         mem::drop(sender);
     });
-    assert!(receiver.recv().is_err());
+    assert!(receiver.recv_ref().is_err());
     t.join().unwrap();
 }
