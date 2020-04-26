@@ -173,33 +173,32 @@ fn try_recv() {
 #[test]
 fn recv_deadline_and_timeout_no_time() {
     maybe_loom_model(|| {
-        let (sender, receiver) = oneshot::channel::<u128>();
+        let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
         assert_eq!(receiver.recv_deadline(start), Ok(None));
-        assert_eq!(receiver.recv_timeout(Duration::from_millis(0)), Ok(None));
-        assert!(start.elapsed() < Duration::from_millis(100));
+        assert!(start.elapsed() < Duration::from_millis(200));
 
-        mem::drop(sender)
+        let start = Instant::now();
+        assert_eq!(receiver.recv_timeout(Duration::from_millis(0)), Ok(None));
+        assert!(start.elapsed() < Duration::from_millis(200));
     })
 }
 
 #[test]
 fn recv_deadline_and_timeout_time_should_elapse() {
     maybe_loom_model(|| {
-        let (sender, receiver) = oneshot::channel::<u128>();
+        let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
         let timeout = Duration::from_millis(100);
         assert_eq!(receiver.recv_deadline(start + timeout), Ok(None));
         assert!(start.elapsed() > timeout);
-        assert!(start.elapsed() < timeout * 2);
+        assert!(start.elapsed() < timeout * 3);
 
         let start = Instant::now();
         assert_eq!(receiver.recv_timeout(timeout), Ok(None));
         assert!(start.elapsed() > timeout);
-        assert!(start.elapsed() < timeout * 2);
-
-        mem::drop(sender)
+        assert!(start.elapsed() < timeout * 3);
     })
 }
