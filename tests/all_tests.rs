@@ -113,11 +113,12 @@ fn try_recv_with_dropped_sender() {
 fn recv_before_send() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
-        thread::spawn(move || {
+        let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(2));
             sender.send(9u128).unwrap();
         });
         assert_eq!(receiver.recv(), Ok(9));
+        t.join().unwrap();
     })
 }
 
@@ -125,11 +126,12 @@ fn recv_before_send() {
 fn recv_timeout_before_send() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
-        thread::spawn(move || {
+        let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(2));
             sender.send(9u128).unwrap();
         });
         assert_eq!(receiver.recv_timeout(Duration::from_secs(1)), Ok(Some(9)));
+        t.join().unwrap();
     })
 }
 
@@ -137,11 +139,12 @@ fn recv_timeout_before_send() {
 fn recv_before_send_then_drop_sender() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
-        thread::spawn(move || {
+        let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(10));
             mem::drop(sender);
         });
         assert!(receiver.recv().is_err());
+        t.join().unwrap();
     })
 }
 
@@ -149,11 +152,12 @@ fn recv_before_send_then_drop_sender() {
 fn recv_timeout_before_send_then_drop_sender() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
-        thread::spawn(move || {
+        let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(10));
             mem::drop(sender);
         });
         assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
+        t.join().unwrap();
     })
 }
 
