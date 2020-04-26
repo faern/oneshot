@@ -161,10 +161,12 @@ impl<T> Receiver<T> {
                 }
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
+                unsafe { Box::from_raw(thread_ptr) };
                 Err(DroppedSenderError(()))
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
+                unsafe { Box::from_raw(thread_ptr) };
                 unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
                 Ok(unsafe { *Box::from_raw(state as *mut T) })
             }
@@ -275,10 +277,12 @@ impl<T> Receiver<T> {
                 }
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
+                unsafe { Box::from_raw(thread_ptr) };
                 Err(DroppedSenderError(()))
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
+                unsafe { Box::from_raw(thread_ptr) };
                 unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
                 Ok(Some(unsafe { *Box::from_raw(state as *mut T) }))
             }
