@@ -31,7 +31,7 @@ use loombox::Box;
 use std::boxed::Box;
 
 mod errors;
-pub use errors::{DroppedSenderError, SendError};
+pub use errors::{DroppedSenderError, SendError, TryRecvError};
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -253,23 +253,23 @@ impl<T> Receiver<T> {
         }
     }
 
-    /// Checks if there is a value in the channel without blocking. Returns:
-    ///  * `Ok(Some(value))` if there is a value in the channel.
-    ///  * `Ok(None)` if the sender has not yet sent a value but the channel is still open.
-    ///  * `Err` if the sender was dropped before sending anything or if the value has already
-    ///    been extracted by previous receive calls.
-    pub fn try_recv(&self) -> Result<Option<T>, DroppedSenderError> {
+    /// Checks if there is a message in the channel without blocking. Returns:
+    ///  * `Ok(message)` if there was a message in the channel.
+    ///  * `Err(Empty)` if the sender is alive, but has not yet sent a message.
+    ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
+    ///    has already been extracted by a previous receive call.
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let state = unsafe { &*self.state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
             // The sender is alive but has not sent anything yet.
-            Ok(None)
+            Err(TryRecvError::Empty)
         } else if state == states::closed() {
             // The sender was already dropped before sending anything.
-            Err(DroppedSenderError)
+            Err(TryRecvError::Disconnected)
         } else {
-            // The sender already sent a value. We take the value and treat the channel as closed.
+            // The sender already sent a value. We take the value and mark the channel disconnected.
             unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
-            Ok(Some(take(unsafe { Box::from_raw(state as *mut T) })))
+            Ok(take(unsafe { Box::from_raw(state as *mut T) }))
         }
     }
 

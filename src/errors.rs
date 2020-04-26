@@ -50,3 +50,26 @@ impl<T> fmt::Debug for SendError<T> {
 }
 
 impl<T> std::error::Error for SendError<T> {}
+
+/// An error returned when trying a non blocking receive on a [`Receiver`].
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TryRecvError {
+    /// The channel is still open, but there was no message present in it.
+    Empty,
+
+    /// The channel is closed. Either the sender was dropped before sending any message, or the
+    /// message has already been extracted from the receiver.
+    Disconnected,
+}
+
+impl fmt::Display for TryRecvError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let msg = match self {
+            TryRecvError::Empty => "receiving on an empty channel",
+            TryRecvError::Disconnected => "receiving on a closed channel",
+        };
+        msg.fmt(f)
+    }
+}
+
+impl std::error::Error for TryRecvError {}

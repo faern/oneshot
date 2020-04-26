@@ -1,3 +1,4 @@
+use oneshot::TryRecvError;
 use std::{
     mem,
     time::{Duration, Instant},
@@ -27,7 +28,7 @@ fn send_before_recv_ref() {
 
         assert_eq!(receiver.recv_ref(), Ok(19i128));
         assert_eq!(receiver.recv_ref(), Err(oneshot::DroppedSenderError));
-        assert_eq!(receiver.try_recv(), Err(oneshot::DroppedSenderError));
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
         assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
     })
 }
@@ -47,8 +48,8 @@ fn send_before_try_recv() {
         let (sender, receiver) = oneshot::channel();
         assert!(sender.send(19i128).is_ok());
 
-        assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
-        assert_eq!(receiver.try_recv(), Err(oneshot::DroppedSenderError));
+        assert_eq!(receiver.try_recv(), Ok(19i128));
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
         assert_eq!(receiver.recv_ref(), Err(oneshot::DroppedSenderError));
         assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
     })
@@ -165,7 +166,7 @@ fn recv_timeout_before_send_then_drop_sender() {
 fn try_recv() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
-        assert_eq!(receiver.try_recv(), Ok(None));
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
         mem::drop(sender)
     })
 }
