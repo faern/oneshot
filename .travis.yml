@@ -13,11 +13,12 @@ script:
   - cargo build
   - cargo test
   # Adding an extra delay in some places in the code. Makes the tests hit other edge cases.
-  - cargo test --features test-delay
+  - RUSTFLAGS="--cfg oneshot_test_delay" cargo test
   - LOOM_MAX_BRANCHES=100000 LOOM_LOG=1 RUSTFLAGS="--cfg loom" cargo test
   - if [[ $(uname -s) == "Linux" ]]; then
       cargo install cargo-valgrind;
       ./check_mem_leaks.sh;
+      RUSTFLAGS="--cfg oneshot_test_delay" ./check_mem_leaks.sh;
     fi
   - if [[ "${TRAVIS_RUST_VERSION}" = "stable" && $(uname -s) == "Linux" ]]; then
       rustup component add rustfmt-preview;

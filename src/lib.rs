@@ -133,7 +133,7 @@ impl<T> Receiver<T> {
             // Conditionally add a delay here to help the tests trigger the edge cases where
             // the sender manages to be dropped or send something before we are able to store our
             // `Thread` object in the state.
-            #[cfg(feature = "test-delay")]
+            #[cfg(oneshot_test_delay)]
             std::thread::sleep(std::time::Duration::from_millis(10));
 
             // Allocate and put our thread instance on the heap and then store it in the state.
@@ -195,7 +195,7 @@ impl<T> Receiver<T> {
             // Conditionally add a delay here to help the tests trigger the edge cases where
             // the sender manages to be dropped or send something before we are able to store our
             // `Thread` object in the state.
-            #[cfg(feature = "test-delay")]
+            #[cfg(oneshot_test_delay)]
             std::thread::sleep(std::time::Duration::from_millis(10));
 
             // Allocate and put our thread instance on the heap and then store it in the state.
@@ -291,7 +291,7 @@ impl<T> Receiver<T> {
             // Conditionally add a delay here to help the tests trigger the edge cases where
             // the sender manages to be dropped or send something before we are able to store our
             // `Thread` object in the state.
-            #[cfg(feature = "test-delay")]
+            #[cfg(oneshot_test_delay)]
             std::thread::sleep(std::time::Duration::from_millis(10));
 
             // Allocate and put our thread instance on the heap and then store it in the state.

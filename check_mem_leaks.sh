@@ -10,5 +10,4 @@ for example_path in examples/*.rs; do
     example=${example_filename%.*}
     echo $example
     cargo valgrind --example "$example"
-    cargo valgrind --features test-delay --example "$example"
 done
