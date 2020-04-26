@@ -51,6 +51,9 @@ impl<T: ?Sized> Drop for Box<T> {
     }
 }
 
+unsafe impl<T: Send> Send for Box<T> {}
+unsafe impl<T: Sync> Sync for Box<T> {}
+
 impl<T: ?Sized> std::ops::Deref for Box<T> {
     type Target = T;
 
