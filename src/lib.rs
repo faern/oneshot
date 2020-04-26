@@ -4,8 +4,19 @@
 
 use core::fmt;
 use core::mem;
+#[cfg(not(all(loom, test)))]
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
+#[cfg(all(loom, test))]
+use loom::sync::atomic::{AtomicUsize, Ordering};
+
+mod thread {
+    pub use std::thread::{current, Thread};
+
+    #[cfg(all(loom, test))]
+    pub use loom::thread::yield_now as park;
+    #[cfg(not(all(loom, test)))]
+    pub use std::thread::park;
+}
 
 /// Creates a new oneshot channel and returns the two endpoints.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -101,7 +112,7 @@ impl<T> Receiver<T> {
             // the sender manages to be dropped or send something before we are able to store our
             // `Thread` object in the state.
             #[cfg(feature = "test-delay")]
-            thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(10));
 
             // Allocate and put our thread instance on the heap and then store it in the state.
             // The sender will use this to unpark us when it sends or is dropped.
@@ -258,73 +269,105 @@ mod states {
 
 #[cfg(test)]
 mod tests {
-    use std::{mem, thread, time::Duration};
+    use std::{mem, time::Duration};
+
+    mod thread {
+        pub use std::thread::sleep;
+
+        #[cfg(loom)]
+        pub use loom::thread::spawn;
+        #[cfg(not(loom))]
+        pub use std::thread::spawn;
+    }
+
+    fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
+        #[cfg(loom)]
+        loom::model(test);
+        #[cfg(not(loom))]
+        test();
+    }
 
     #[test]
     fn send_with_dropped_receiver() {
-        let (sender, receiver) = crate::channel();
-        mem::drop(receiver);
-        let send_error = sender.send(5u128).unwrap_err();
-        assert_eq!(send_error, crate::DroppedReceiverError(Box::new(5)));
-        assert_eq!(send_error.into_value(), 5);
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            mem::drop(receiver);
+            let send_error = sender.send(5u128).unwrap_err();
+            assert_eq!(send_error, crate::DroppedReceiverError(Box::new(5)));
+            assert_eq!(send_error.into_value(), 5);
+        })
     }
 
     #[test]
     fn recv_with_dropped_sender() {
-        let (sender, receiver) = crate::channel::<u128>();
-        mem::drop(sender);
-        receiver.recv().unwrap_err();
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel::<u128>();
+            mem::drop(sender);
+            receiver.recv().unwrap_err();
+        })
     }
 
     #[test]
     fn try_recv_with_dropped_sender() {
-        let (sender, receiver) = crate::channel::<u128>();
-        mem::drop(sender);
-        receiver.try_recv().unwrap_err();
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel::<u128>();
+            mem::drop(sender);
+            receiver.try_recv().unwrap_err();
+        })
     }
 
     #[test]
     fn send_before_recv() {
-        let (sender, receiver) = crate::channel();
-        assert!(sender.send(19i128).is_ok());
-        assert_eq!(receiver.recv(), Ok(19i128));
-        assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
-        assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            assert!(sender.send(19i128).is_ok());
+            assert_eq!(receiver.recv(), Ok(19i128));
+            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
+        })
     }
 
     #[test]
     fn send_before_try_recv() {
-        let (sender, receiver) = crate::channel();
-        assert!(sender.send(19i128).is_ok());
-        assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
-        assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
-        assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            assert!(sender.send(19i128).is_ok());
+            assert_eq!(receiver.try_recv(), Ok(Some(19i128)));
+            assert_eq!(receiver.try_recv(), Err(crate::DroppedSenderError(())));
+            assert_eq!(receiver.recv(), Err(crate::DroppedSenderError(())));
+        })
     }
 
     #[test]
     fn recv_before_send() {
-        let (sender, receiver) = crate::channel();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(2));
-            sender.send(9u128).unwrap();
-        });
-        assert_eq!(receiver.recv(), Ok(9));
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(2));
+                sender.send(9u128).unwrap();
+            });
+            assert_eq!(receiver.recv(), Ok(9));
+        })
     }
 
     #[test]
     fn recv_before_send_then_drop_sender() {
-        let (sender, receiver) = crate::channel::<u128>();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(2));
-            mem::drop(sender);
-        });
-        assert!(receiver.recv().is_err());
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel::<u128>();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(10));
+                mem::drop(sender);
+            });
+            assert!(receiver.recv().is_err());
+        })
     }
 
     #[test]
     fn send_then_drop_receiver() {
-        let (sender, receiver) = crate::channel();
-        assert!(sender.send(19i128).is_ok());
-        mem::drop(receiver);
+        maybe_loom_model(|| {
+            let (sender, receiver) = crate::channel();
+            assert!(sender.send(19i128).is_ok());
+            mem::drop(receiver);
+        })
     }
 }

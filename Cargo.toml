@@ -12,6 +12,8 @@ edition = "2018"
 
 [dependencies]
 
+[dev-dependencies]
+loom = "0.3.2"
 
 [features]
 test-delay = []
