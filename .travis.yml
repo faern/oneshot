@@ -10,10 +10,10 @@ os:
   - windows
 
 script:
-  - cargo build --verbose
-  - cargo test --verbose
+  - cargo build
+  - cargo test
   # Adding an extra delay in some places in the code. Makes the tests hit other edge cases.
-  - cargo test --features test-delay --verbose
+  - cargo test --features test-delay
   - LOOM_MAX_BRANCHES=100000 LOOM_LOG=1 RUSTFLAGS="--cfg loom" cargo test
   - if [[ $(uname -s) == "Linux" ]]; then
       cargo install cargo-valgrind;
