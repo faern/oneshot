@@ -2,7 +2,6 @@
 
 #![deny(rust_2018_idioms)]
 
-use core::fmt;
 use core::mem;
 #[cfg(not(feature = "loom"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -28,6 +27,11 @@ mod thread {
 mod loombox;
 #[cfg(feature = "loom")]
 use loombox::Box;
+#[cfg(not(feature = "loom"))]
+use std::boxed::Box;
+
+mod errors;
+pub use errors::{DroppedSenderError, SendError};
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -65,7 +69,7 @@ impl<T> Sender<T> {
     /// Sends `value` over the channel to the [`Receiver`].
     /// Returns an error if the receiver has already been dropped. The value can
     /// be extracted from the error.
-    pub fn send(self, value: T) -> Result<(), DroppedReceiverError<T>> {
+    pub fn send(self, value: T) -> Result<(), SendError<T>> {
         let state_ptr = self.state_ptr;
         // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
@@ -83,7 +87,7 @@ impl<T> Sender<T> {
         } else if state == states::closed() {
             // The receiver was already dropped. We are responsible for freeing the state and value
             unsafe { Box::from_raw(state_ptr) };
-            Err(DroppedReceiverError(unsafe { Box::from_raw(value_ptr) }))
+            Err(SendError::new(unsafe { Box::from_raw(value_ptr) }))
         } else {
             // The receiver is waiting. Wake it up so it can return the value. The receiver frees
             // the state, the value. We free the thread instance in the state
@@ -382,47 +386,6 @@ impl<T> Drop for Receiver<T> {
         }
     }
 }
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct DroppedSenderError;
-
-impl fmt::Display for DroppedSenderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "Oneshot sender dropped without sending anything or value already received".fmt(f)
-    }
-}
-
-impl std::error::Error for DroppedSenderError {}
-
-pub struct DroppedReceiverError<T>(pub Box<T>);
-
-impl<T: Eq> Eq for DroppedReceiverError<T> {}
-impl<T: PartialEq> PartialEq for DroppedReceiverError<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<T> DroppedReceiverError<T> {
-    #[inline]
-    pub fn into_value(self) -> T {
-        take(self.0)
-    }
-}
-
-impl<T> fmt::Display for DroppedReceiverError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "Oneshot receiver has already been dropped".fmt(f)
-    }
-}
-
-impl<T> fmt::Debug for DroppedReceiverError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DroppedReceiverError<{}>(_)", stringify!(T))
-    }
-}
-
-impl<T> std::error::Error for DroppedReceiverError<T> {}
 
 mod states {
     static INIT: u8 = 1u8;

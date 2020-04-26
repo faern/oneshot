@@ -86,7 +86,8 @@ fn send_with_dropped_receiver() {
         let (sender, receiver) = oneshot::channel();
         mem::drop(receiver);
         let send_error = sender.send(5u128).unwrap_err();
-        assert_eq!(send_error.into_value(), 5);
+        assert_eq!(*send_error.as_inner(), 5);
+        assert_eq!(send_error.into_inner(), 5);
     })
 }
 
