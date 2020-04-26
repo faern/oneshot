@@ -220,6 +220,12 @@ impl<T> Receiver<T> {
         }
     }
 
+    /// Attempts to wait for a value from the [`Sender`], returning an error if the channel is
+    /// closed. This is similar to [`Receiver::recv`], but with a bit worse performance. Prefer
+    /// `recv` if your code allows consuming the receiver.
+    ///
+    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// using this receiver will return an error.
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         let state_ptr = self.state_ptr;
 
@@ -284,6 +290,9 @@ impl<T> Receiver<T> {
     ///  * `Err(Empty)` if the sender is alive, but has not yet sent a message.
     ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
     ///    has already been extracted by a previous receive call.
+    ///
+    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// using this receiver will return an error.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let state = unsafe { &*self.state_ptr }.load(Ordering::SeqCst);
         if state == states::init() {
@@ -304,6 +313,9 @@ impl<T> Receiver<T> {
     ///  * `Err(Timeout)` if no message arrived on the channel before the timeout was reached.
     ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
     ///    has already been extracted by a previous receive call.
+    ///
+    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// using this receiver will return an error.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self.recv_deadline(deadline),
@@ -316,6 +328,9 @@ impl<T> Receiver<T> {
     ///  * `Err(Timeout)` if no message arrived on the channel before the deadline was reached.
     ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
     ///    has already been extracted by a previous receive call.
+    ///
+    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// using this receiver will return an error.
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         let state_ptr = self.state_ptr;
 
