@@ -72,6 +72,13 @@ fn send_before_recv_timeout() {
     })
 }
 
+#[async_std::test]
+async fn send_before_await() {
+    let (sender, receiver) = oneshot::channel();
+    assert!(sender.send(19i128).is_ok());
+    assert_eq!(receiver.await, Ok(19i128));
+}
+
 #[test]
 fn send_then_drop_receiver() {
     maybe_loom_model(|| {
@@ -110,6 +117,13 @@ fn try_recv_with_dropped_sender() {
     })
 }
 
+#[async_std::test]
+async fn await_with_dropped_sender() {
+    let (sender, receiver) = oneshot::channel::<u128>();
+    mem::drop(sender);
+    receiver.await.unwrap_err();
+}
+
 #[test]
 fn recv_before_send() {
     maybe_loom_model(|| {
@@ -136,6 +150,17 @@ fn recv_timeout_before_send() {
     })
 }
 
+#[async_std::test]
+async fn await_before_send() {
+    let (sender, receiver) = oneshot::channel();
+    let t = async_std::task::spawn(async move {
+        async_std::task::sleep(Duration::from_millis(2)).await;
+        sender.send(9u128)
+    });
+    assert_eq!(receiver.await, Ok(9));
+    t.await.unwrap();
+}
+
 #[test]
 fn recv_before_send_then_drop_sender() {
     maybe_loom_model(|| {
@@ -160,6 +185,17 @@ fn recv_timeout_before_send_then_drop_sender() {
         assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
         t.join().unwrap();
     })
+}
+
+#[async_std::test]
+async fn await_before_send_then_drop_sender() {
+    let (sender, receiver) = oneshot::channel::<u128>();
+    let t = async_std::task::spawn(async {
+        async_std::task::sleep(Duration::from_millis(10)).await;
+        mem::drop(sender);
+    });
+    assert!(receiver.await.is_err());
+    t.await;
 }
 
 #[test]

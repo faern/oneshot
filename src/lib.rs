@@ -3,8 +3,10 @@
 #![deny(rust_2018_idioms)]
 
 use core::mem;
+use core::pin::Pin;
 #[cfg(not(feature = "loom"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
+use core::task::{self, Poll};
 #[cfg(feature = "loom")]
 use loom::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -90,8 +92,8 @@ impl<T> Sender<T> {
             Err(SendError::new(unsafe { Box::from_raw(value_ptr) }))
         } else {
             // The receiver is waiting. Wake it up so it can return the value. The receiver frees
-            // the state, the value. We free the thread instance in the state
-            unsafe { Box::from_raw(state as *mut thread::Thread) }.unpark();
+            // the state and the value. We free the waker instance in the state.
+            take(unsafe { Box::from_raw(state as *mut ReceiverWaker) }).unpark();
             Ok(())
         }
     }
@@ -109,8 +111,32 @@ impl<T> Drop for Sender<T> {
             unsafe { Box::from_raw(self.state_ptr) };
         } else {
             // The receiver started waiting. Wake it up so it can detect that the channel closed.
-            // The receiver frees the state. We free the thread instance in the state
-            unsafe { Box::from_raw(state as *mut thread::Thread) }.unpark();
+            // The receiver frees the state. We free the waker instance in the state
+            take(unsafe { Box::from_raw(state as *mut ReceiverWaker) }).unpark();
+        }
+    }
+}
+
+enum ReceiverWaker {
+    /// The receiver is waiting synchronously. Its thread is parked.
+    Thread(thread::Thread),
+    /// The receiver is waiting asynchronously. Its task can be woken up with this `Waker`.
+    Task(task::Waker),
+}
+
+impl ReceiverWaker {
+    pub fn current_thread() -> Box<Self> {
+        Box::new(Self::Thread(thread::current()))
+    }
+
+    pub fn task_waker(cx: &task::Context<'_>) -> Box<Self> {
+        Box::new(Self::Task(cx.waker().clone()))
+    }
+
+    pub fn unpark(self) {
+        match self {
+            ReceiverWaker::Thread(thread) => thread.unpark(),
+            ReceiverWaker::Task(waker) => waker.wake(),
         }
     }
 }
@@ -148,10 +174,10 @@ impl<T> Receiver<T> {
             // Allocate and put our thread instance on the heap and then store it in the state.
             // The sender will use this to unpark us when it sends or is dropped.
             // The actor taking this object out of the state is responsible for freeing it.
-            let thread_ptr = Box::into_raw(Box::new(thread::current()));
+            let waker_ptr = Box::into_raw(ReceiverWaker::current_thread());
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
-                thread_ptr as usize,
+                waker_ptr as usize,
                 Ordering::SeqCst,
             );
             if state == states::init() {
@@ -164,7 +190,7 @@ impl<T> Receiver<T> {
                         // The sender was dropped while we were parked.
                         unsafe { Box::from_raw(state_ptr) };
                         break Err(RecvError);
-                    } else if state != thread_ptr as usize {
+                    } else if state != waker_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and free the state.
                         unsafe { Box::from_raw(state_ptr) };
@@ -173,13 +199,13 @@ impl<T> Receiver<T> {
                 }
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
-                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(waker_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
                 Err(RecvError)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and free the state.
-                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(waker_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
                 Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
@@ -210,10 +236,10 @@ impl<T> Receiver<T> {
             // Allocate and put our thread instance on the heap and then store it in the state.
             // The sender will use this to unpark us when it sends or is dropped.
             // The actor taking this object out of the state is responsible for freeing it.
-            let thread_ptr = Box::into_raw(Box::new(thread::current()));
+            let waker_ptr = Box::into_raw(ReceiverWaker::current_thread());
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
-                thread_ptr as usize,
+                waker_ptr as usize,
                 Ordering::SeqCst,
             );
             if state == states::init() {
@@ -225,7 +251,7 @@ impl<T> Receiver<T> {
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
                         break Err(RecvError);
-                    } else if state != thread_ptr as usize {
+                    } else if state != waker_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
                         unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
@@ -234,12 +260,12 @@ impl<T> Receiver<T> {
                 }
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
-                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(waker_ptr) };
                 Err(RecvError)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
-                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(waker_ptr) };
                 unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
                 Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
@@ -306,10 +332,10 @@ impl<T> Receiver<T> {
             // Allocate and put our thread instance on the heap and then store it in the state.
             // The sender will use this to unpark us when it sends or is dropped.
             // The actor taking this object out of the state is responsible for freeing it.
-            let thread_ptr = Box::into_raw(Box::new(thread::current()));
+            let waker_ptr = Box::into_raw(ReceiverWaker::current_thread());
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
-                thread_ptr as usize,
+                waker_ptr as usize,
                 Ordering::SeqCst,
             );
             if state == states::init() {
@@ -321,9 +347,9 @@ impl<T> Receiver<T> {
                         // We reached the deadline. Take our thread object out of the state again.
                         let state = unsafe { &*state_ptr }.swap(states::init(), Ordering::SeqCst);
                         assert_ne!(state, states::init());
-                        if state == thread_ptr as usize {
+                        if state == waker_ptr as usize {
                             // The sender has not touched the state. We took out the thread object.
-                            unsafe { Box::from_raw(thread_ptr) };
+                            unsafe { Box::from_raw(waker_ptr) };
                             break Err(RecvTimeoutError::Timeout);
                         } else if state == states::closed() {
                             // The sender was dropped while we were parked.
@@ -341,7 +367,7 @@ impl<T> Receiver<T> {
                     if state == states::closed() {
                         // The sender was dropped while we were parked.
                         break Err(RecvTimeoutError::Disconnected);
-                    } else if state != thread_ptr as usize {
+                    } else if state != waker_ptr as usize {
                         // The sender sent data while we were parked.
                         // We take the value and treat the channel as closed.
                         unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
@@ -350,12 +376,12 @@ impl<T> Receiver<T> {
                 }
             } else if state == states::closed() {
                 // The sender was dropped before sending anything while we prepared to park.
-                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(waker_ptr) };
                 Err(RecvTimeoutError::Disconnected)
             } else {
                 // The sender sent data while we prepared to park.
                 // We take the value and treat the channel as closed.
-                unsafe { Box::from_raw(thread_ptr) };
+                unsafe { Box::from_raw(waker_ptr) };
                 unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
                 Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
@@ -366,6 +392,42 @@ impl<T> Receiver<T> {
             // The sender already sent a value. We take the value and treat the channel as closed.
             unsafe { &*state_ptr }.store(states::closed(), Ordering::SeqCst);
             Ok(take(unsafe { Box::from_raw(state as *mut T) }))
+        }
+    }
+}
+
+impl<T> core::future::Future for Receiver<T> {
+    type Output = Result<T, RecvError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        match self.try_recv() {
+            Err(TryRecvError::Empty) => {
+                // Allocate and put our waker instance on the heap and then store it in the state.
+                // The sender will use this to unpark us when it sends or is dropped.
+                // The actor taking this object out of the state is responsible for freeing it.
+                let waker_ptr = Box::into_raw(ReceiverWaker::task_waker(cx));
+                let state = unsafe { &*self.state_ptr }.compare_and_swap(
+                    states::init(),
+                    waker_ptr as usize,
+                    Ordering::SeqCst,
+                );
+                if state == states::init() {
+                    // We stored our waker, now we return and let the sender wake us up
+                    Poll::Pending
+                } else if state == states::closed() {
+                    // The sender was dropped before sending anything while we prepared to park.
+                    unsafe { Box::from_raw(waker_ptr) };
+                    Poll::Ready(Err(RecvError))
+                } else {
+                    // The sender sent data while we prepared to park.
+                    // We take the value and treat the channel as closed.
+                    unsafe { Box::from_raw(waker_ptr) };
+                    unsafe { &*self.state_ptr }.store(states::closed(), Ordering::SeqCst);
+                    Poll::Ready(Ok(take(unsafe { Box::from_raw(state as *mut T) })))
+                }
+            }
+            Err(TryRecvError::Disconnected) => Poll::Ready(Err(RecvError)),
+            Ok(message) => Poll::Ready(Ok(message)),
         }
     }
 }
