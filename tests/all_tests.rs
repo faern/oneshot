@@ -72,6 +72,7 @@ fn send_before_recv_timeout() {
     })
 }
 
+#[cfg(not(feature = "loom"))]
 #[async_std::test]
 async fn send_before_await() {
     let (sender, receiver) = oneshot::channel();
@@ -117,6 +118,7 @@ fn try_recv_with_dropped_sender() {
     })
 }
 
+#[cfg(not(feature = "loom"))]
 #[async_std::test]
 async fn await_with_dropped_sender() {
     let (sender, receiver) = oneshot::channel::<u128>();
@@ -150,6 +152,7 @@ fn recv_timeout_before_send() {
     })
 }
 
+#[cfg(not(feature = "loom"))]
 #[async_std::test]
 async fn await_before_send() {
     let (sender, receiver) = oneshot::channel();
@@ -187,6 +190,7 @@ fn recv_timeout_before_send_then_drop_sender() {
     })
 }
 
+#[cfg(not(feature = "loom"))]
 #[async_std::test]
 async fn await_before_send_then_drop_sender() {
     let (sender, receiver) = oneshot::channel::<u128>();
