@@ -37,6 +37,9 @@ pub use errors::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+    debug_assert_ne!(states::init(), 0);
+    debug_assert_ne!(states::disconnected(), 0);
+    debug_assert_ne!(states::init(), states::disconnected());
     // Allocate the state on the heap and initialize it with `states::init()` and get the pointer.
     // The last endpoint of the channel to be alive is responsible for freeing the state.
     let state_ptr = Box::into_raw(Box::new(AtomicUsize::new(states::init())));
@@ -80,6 +83,8 @@ impl<T> Sender<T> {
         // Put the message on the heap and get the pointer. If sending succeeds the receiver is
         // responsible for freeing it, otherwise we do that
         let message_ptr = Box::into_raw(Box::new(message));
+        debug_assert_ne!(message_ptr as usize, states::init());
+        debug_assert_ne!(message_ptr as usize, states::disconnected());
 
         // Store the address to the message in the state and read out what state the receiver is in
         let state = unsafe { &*state_ptr }.swap(message_ptr as usize, Ordering::SeqCst);
@@ -176,6 +181,8 @@ impl<T> Receiver<T> {
             // The sender will use this to unpark us when it sends or is dropped.
             // The actor taking this object out of the state is responsible for freeing it.
             let waker_ptr = Box::into_raw(ReceiverWaker::current_thread());
+            debug_assert_ne!(waker_ptr as usize, states::init());
+            debug_assert_ne!(waker_ptr as usize, states::disconnected());
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
                 waker_ptr as usize,
@@ -187,6 +194,7 @@ impl<T> Receiver<T> {
                     thread::park();
                     // Check if the sender updated the state
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+                    debug_assert_ne!(state, states::init());
                     if state == states::disconnected() {
                         // The sender was dropped while we were parked.
                         unsafe { Box::from_raw(state_ptr) };
@@ -244,6 +252,8 @@ impl<T> Receiver<T> {
             // The sender will use this to unpark us when it sends or is dropped.
             // The actor taking this object out of the state is responsible for freeing it.
             let waker_ptr = Box::into_raw(ReceiverWaker::current_thread());
+            debug_assert_ne!(waker_ptr as usize, states::init());
+            debug_assert_ne!(waker_ptr as usize, states::disconnected());
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
                 waker_ptr as usize,
@@ -255,6 +265,7 @@ impl<T> Receiver<T> {
                     thread::park();
                     // Check if the sender updated the state
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+                    debug_assert_ne!(state, states::init());
                     if state == states::disconnected() {
                         // The sender was dropped while we were parked.
                         break Err(RecvError);
@@ -349,6 +360,8 @@ impl<T> Receiver<T> {
             // The sender will use this to unpark us when it sends or is dropped.
             // The actor taking this object out of the state is responsible for freeing it.
             let waker_ptr = Box::into_raw(ReceiverWaker::current_thread());
+            debug_assert_ne!(waker_ptr as usize, states::init());
+            debug_assert_ne!(waker_ptr as usize, states::disconnected());
             let state = unsafe { &*state_ptr }.compare_and_swap(
                 states::init(),
                 waker_ptr as usize,
@@ -362,7 +375,7 @@ impl<T> Receiver<T> {
                     } else {
                         // We reached the deadline. Take our thread object out of the state again.
                         let state = unsafe { &*state_ptr }.swap(states::init(), Ordering::SeqCst);
-                        assert_ne!(state, states::init());
+                        debug_assert_ne!(state, states::init());
                         if state == waker_ptr as usize {
                             // The sender has not touched the state. We took out the thread object.
                             unsafe { Box::from_raw(waker_ptr) };
@@ -380,6 +393,7 @@ impl<T> Receiver<T> {
                     }
                     // Check if the sender updated the state
                     let state = unsafe { &*state_ptr }.load(Ordering::SeqCst);
+                    debug_assert_ne!(state, states::init());
                     if state == states::disconnected() {
                         // The sender was dropped while we were parked.
                         break Err(RecvTimeoutError::Disconnected);
@@ -422,6 +436,8 @@ impl<T> core::future::Future for Receiver<T> {
                 // The sender will use this to unpark us when it sends or is dropped.
                 // The actor taking this object out of the state is responsible for freeing it.
                 let waker_ptr = Box::into_raw(ReceiverWaker::task_waker(cx));
+                debug_assert_ne!(waker_ptr as usize, states::init());
+                debug_assert_ne!(waker_ptr as usize, states::disconnected());
                 let state = unsafe { &*self.state_ptr }.compare_and_swap(
                     states::init(),
                     waker_ptr as usize,
@@ -492,6 +508,13 @@ mod states {
     #[inline(always)]
     pub fn disconnected() -> usize {
         &DISCONNECTED as *const u8 as usize
+    }
+
+    #[test]
+    fn special_state_values_sane() {
+        assert_ne!(init(), 0);
+        assert_ne!(disconnected(), 0);
+        assert_ne!(init(), disconnected());
     }
 }
 
