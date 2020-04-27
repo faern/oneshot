@@ -68,31 +68,33 @@ unsafe impl<T: Send> Send for Sender<T> {}
 unsafe impl<T: Send> Send for Receiver<T> {}
 
 impl<T> Sender<T> {
-    /// Sends `value` over the channel to the [`Receiver`].
-    /// Returns an error if the receiver has already been dropped. The value can
+    /// Sends `message` over the channel to the [`Receiver`].
+    ///
+    /// Returns an error if the receiver has already been dropped. The message can
     /// be extracted from the error.
-    pub fn send(self, value: T) -> Result<(), SendError<T>> {
+    pub fn send(self, message: T) -> Result<(), SendError<T>> {
         let state_ptr = self.state_ptr;
         // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
 
-        // Put the value on the heap and get the pointer. If sending succeeds the receiver is
+        // Put the message on the heap and get the pointer. If sending succeeds the receiver is
         // responsible for freeing it, otherwise we do that
-        let value_ptr = Box::into_raw(Box::new(value));
+        let message_ptr = Box::into_raw(Box::new(message));
 
-        // Store the address to the value in the state and read out what state the receiver is in
-        let state = unsafe { &*state_ptr }.swap(value_ptr as usize, Ordering::SeqCst);
+        // Store the address to the message in the state and read out what state the receiver is in
+        let state = unsafe { &*state_ptr }.swap(message_ptr as usize, Ordering::SeqCst);
         if state == states::init() {
-            // The receiver is alive and has not started waiting. Send done
-            // Receiver frees state and value from heap
+            // The receiver is alive and has not started waiting. Send done.
+            // Receiver frees state and message from heap.
             Ok(())
         } else if state == states::disconnected() {
-            // The receiver was already dropped. We are responsible for freeing the state and value
+            // The receiver was already dropped.
+            // We are responsible for freeing the state and the message
             unsafe { Box::from_raw(state_ptr) };
-            Err(SendError::new(unsafe { Box::from_raw(value_ptr) }))
+            Err(SendError::new(unsafe { Box::from_raw(message_ptr) }))
         } else {
-            // The receiver is waiting. Wake it up so it can return the value. The receiver frees
-            // the state and the value. We free the waker instance in the state.
+            // The receiver is waiting. Wake it up so it can return the message. The receiver frees
+            // the state and the message. We free the waker instance in the state.
             take(unsafe { Box::from_raw(state as *mut ReceiverWaker) }).unpark();
             Ok(())
         }
@@ -146,15 +148,14 @@ impl<T> Receiver<T> {
     /// disconnected.
     ///
     /// This method will always block the current thread if there is no data available and it's
-    /// still possible for the value to be sent. Once the value is sent to the corresponding
+    /// still possible for the message to be sent. Once the message is sent to the corresponding
     /// [`Sender`], then this receiver will wake up and return that message.
     ///
     /// If the corresponding [`Sender`] has disconnected (been dropped), or it disconnects while
-    /// this call is blocking, this call will wake up and return Err to indicate that the value
-    /// can never be received on this channel. However, since channels are buffered, if the value is
-    /// sent before the disconnect, it will still be properly received.
+    /// this call is blocking, this call will wake up and return `Err` to indicate that the message
+    /// can never be received on this channel.
     ///
-    /// If a sent value has already been extracted from this channel this method will return an
+    /// If a sent message has already been extracted from this channel this method will return an
     /// error.
     pub fn recv(self) -> Result<T, RecvError> {
         let state_ptr = self.state_ptr;
@@ -191,8 +192,8 @@ impl<T> Receiver<T> {
                         unsafe { Box::from_raw(state_ptr) };
                         break Err(RecvError);
                     } else if state != waker_ptr as usize {
-                        // The sender sent data while we were parked.
-                        // We take the value and free the state.
+                        // The sender sent the message while we were parked.
+                        // We take the message and free the state.
                         unsafe { Box::from_raw(state_ptr) };
                         break Ok(take(unsafe { Box::from_raw(state as *mut T) }));
                     }
@@ -203,28 +204,28 @@ impl<T> Receiver<T> {
                 unsafe { Box::from_raw(state_ptr) };
                 Err(RecvError)
             } else {
-                // The sender sent data while we prepared to park.
-                // We take the value and free the state.
+                // The sender sent the message while we prepared to park.
+                // We take the message and free the state.
                 unsafe { Box::from_raw(waker_ptr) };
                 unsafe { Box::from_raw(state_ptr) };
                 Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
         } else if state == states::disconnected() {
-            // The sender was dropped before sending anything, or we already took the value.
+            // The sender was dropped before sending anything, or we already received the message.
             unsafe { Box::from_raw(state_ptr) };
             Err(RecvError)
         } else {
-            // The sender already sent a value. We take the value and free the state.
+            // The sender already sent the message. We take the message and free the state.
             unsafe { Box::from_raw(state_ptr) };
             Ok(take(unsafe { Box::from_raw(state as *mut T) }))
         }
     }
 
     /// Attempts to wait for a message from the [`Sender`], returning an error if the channel is
-    /// disconnected. This is similar to [`Receiver::recv`], but with a bit worse performance.
-    /// Prefer `recv` if your code allows consuming the receiver.
+    /// disconnected. This is a non consuming version of [`Receiver::recv`], but with a bit
+    /// worse performance. Prefer `[`Receiver::recv`]` if your code allows consuming the receiver.
     ///
-    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         let state_ptr = self.state_ptr;
@@ -276,7 +277,7 @@ impl<T> Receiver<T> {
                 Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
         } else if state == states::disconnected() {
-            // The sender was dropped before sending anything, or we already took the value.
+            // The sender was dropped before sending anything, or we already received the message.
             Err(RecvError)
         } else {
             // The sender sent the message. We take the message and mark the channel disconnected.
@@ -291,7 +292,7 @@ impl<T> Receiver<T> {
     ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
     ///    has already been extracted by a previous receive call.
     ///
-    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let state = unsafe { &*self.state_ptr }.load(Ordering::SeqCst);
@@ -299,7 +300,7 @@ impl<T> Receiver<T> {
             // The sender is alive but has not sent anything yet.
             Err(TryRecvError::Empty)
         } else if state == states::disconnected() {
-            // The sender was already dropped before sending anything.
+            // The sender was dropped before sending anything, or we already received the message.
             Err(TryRecvError::Disconnected)
         } else {
             // The sender sent the message. We take the message and mark the channel disconnected.
@@ -314,7 +315,7 @@ impl<T> Receiver<T> {
     ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
     ///    has already been extracted by a previous receive call.
     ///
-    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
@@ -329,7 +330,7 @@ impl<T> Receiver<T> {
     ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
     ///    has already been extracted by a previous receive call.
     ///
-    /// If a message is returned, the channel is marked as disconnected and any subsequent receive
+    /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         let state_ptr = self.state_ptr;
@@ -401,7 +402,7 @@ impl<T> Receiver<T> {
                 Ok(take(unsafe { Box::from_raw(state as *mut T) }))
             }
         } else if state == states::disconnected() {
-            // The sender was dropped before sending anything, or we already took the value.
+            // The sender was dropped before sending anything, or we already received the message.
             Err(RecvTimeoutError::Disconnected)
         } else {
             // The sender sent the message. We take the message and mark the channel disconnected.
@@ -469,10 +470,10 @@ mod states {
     static DISCONNECTED: u8 = 2u8;
 
     /// Returns a memory address in integer form representing the initial state of a channel.
-    /// This state is active while both the sender and receiver are still alive, no value
+    /// This state is active while both the sender and receiver are still alive, no message
     /// has yet been sent and the receiver has not started receiving.
     ///
-    /// The value is guaranteed to:
+    /// The return value is guaranteed to:
     /// * be the same for every call in the same process
     /// * be different from what `states::disconnected` returns
     /// * and never equal a pointer returned from `Box::into_raw`.
@@ -484,7 +485,7 @@ mod states {
     /// Returns a memory address in integer form representing a disconnected channel.
     /// A channel is disconnected when one end has been dropped or a sent message has been received.
     ///
-    /// The value is guaranteed to:
+    /// The return value is guaranteed to:
     /// * be the same for every call in the same process
     /// * be different from what `states::init` returns
     /// * and never equal a pointer returned from `Box::into_raw`.
