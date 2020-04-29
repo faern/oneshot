@@ -4,32 +4,32 @@
 
 use core::mem;
 use core::pin::Pin;
-#[cfg(not(feature = "loom"))]
+#[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{self, Poll};
-#[cfg(feature = "loom")]
+#[cfg(loom)]
 use loom::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 mod thread {
     pub use std::thread::{current, Thread};
 
-    #[cfg(feature = "loom")]
+    #[cfg(loom)]
     pub use loom::thread::yield_now as park;
-    #[cfg(not(feature = "loom"))]
+    #[cfg(not(loom))]
     pub use std::thread::{park, park_timeout};
 
-    #[cfg(feature = "loom")]
+    #[cfg(loom)]
     pub fn park_timeout(_timeout: std::time::Duration) {
         loom::thread::yield_now()
     }
 }
 
-#[cfg(feature = "loom")]
+#[cfg(loom)]
 mod loombox;
-#[cfg(feature = "loom")]
+#[cfg(loom)]
 use loombox::Box;
-#[cfg(not(feature = "loom"))]
+#[cfg(not(loom))]
 use std::boxed::Box;
 
 mod errors;
@@ -523,11 +523,11 @@ mod states {
 #[allow(clippy::boxed_local)]
 #[inline(always)]
 fn take<T>(b: Box<T>) -> T {
-    #[cfg(not(feature = "loom"))]
+    #[cfg(not(loom))]
     {
         *b
     }
-    #[cfg(feature = "loom")]
+    #[cfg(loom)]
     {
         b.into_value()
     }

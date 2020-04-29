@@ -7,16 +7,16 @@ use std::{
 mod thread {
     pub use std::thread::sleep;
 
-    #[cfg(feature = "loom")]
+    #[cfg(loom)]
     pub use loom::thread::spawn;
-    #[cfg(not(feature = "loom"))]
+    #[cfg(not(loom))]
     pub use std::thread::spawn;
 }
 
 fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
-    #[cfg(feature = "loom")]
+    #[cfg(loom)]
     loom::model(test);
-    #[cfg(not(feature = "loom"))]
+    #[cfg(not(loom))]
     test();
 }
 
@@ -72,7 +72,7 @@ fn send_before_recv_timeout() {
     })
 }
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(loom))]
 #[async_std::test]
 async fn send_before_await() {
     let (sender, receiver) = oneshot::channel();
@@ -118,7 +118,7 @@ fn try_recv_with_dropped_sender() {
     })
 }
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(loom))]
 #[async_std::test]
 async fn await_with_dropped_sender() {
     let (sender, receiver) = oneshot::channel::<u128>();
@@ -152,7 +152,7 @@ fn recv_timeout_before_send() {
     })
 }
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(loom))]
 #[async_std::test]
 async fn await_before_send() {
     let (sender, receiver) = oneshot::channel();
@@ -190,7 +190,7 @@ fn recv_timeout_before_send_then_drop_sender() {
     })
 }
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(loom))]
 #[async_std::test]
 async fn await_before_send_then_drop_sender() {
     let (sender, receiver) = oneshot::channel::<u128>();
@@ -256,7 +256,7 @@ fn recv_deadline_and_timeout_time_should_elapse() {
     })
 }
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(loom))]
 #[test]
 fn non_send_type_can_be_used_on_same_thread() {
     use std::ptr;
