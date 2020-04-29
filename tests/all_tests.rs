@@ -255,3 +255,17 @@ fn recv_deadline_and_timeout_time_should_elapse() {
         assert!(start.elapsed() < timeout * 3);
     })
 }
+
+#[cfg(not(feature = "loom"))]
+#[test]
+fn non_send_type_can_be_used_on_same_thread() {
+    use std::ptr;
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct NotSend(*mut ());
+
+    let (sender, receiver) = oneshot::channel();
+    sender.send(NotSend(ptr::null_mut())).unwrap();
+    let reply = receiver.recv().unwrap();
+    assert_eq!(reply, NotSend(ptr::null_mut()));
+}
