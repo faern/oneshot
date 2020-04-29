@@ -21,9 +21,9 @@ script:
   - RUSTFLAGS="--cfg oneshot_test_delay" cargo test
   - RUSTFLAGS="--cfg loom" LOOM_MAX_BRANCHES=100000 cargo test
   - if [[ $(uname -s) == "Linux" ]]; then
-      cargo install cargo-valgrind;
-      cargo valgrind --test all_tests;
-      ./check_mem_leaks.sh;
+      cargo install cargo-valgrind &&
+      cargo valgrind --test all_tests &&
+      ./check_mem_leaks.sh &&
       RUSTFLAGS="--cfg oneshot_test_delay" ./check_mem_leaks.sh;
     fi
   - if [[ "${TRAVIS_RUST_VERSION}" = "stable" && $(uname -s) == "Linux" ]]; then
