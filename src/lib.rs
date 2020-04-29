@@ -50,6 +50,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         },
         Receiver {
             state_ptr,
+            async_waker_ptr: 0,
             _marker: std::marker::PhantomData,
         },
     )
@@ -64,11 +65,13 @@ pub struct Sender<T> {
 #[derive(Debug, Eq, PartialEq, Hash)]
 pub struct Receiver<T> {
     state_ptr: *mut AtomicUsize,
+    async_waker_ptr: usize,
     _marker: std::marker::PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for Sender<T> {}
 unsafe impl<T: Send> Send for Receiver<T> {}
+impl<T> Unpin for Receiver<T> {}
 
 impl<T> Sender<T> {
     /// Sends `message` over the channel to the [`Receiver`].
@@ -429,37 +432,47 @@ impl<T> Receiver<T> {
 impl<T> core::future::Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        match self.try_recv() {
-            Err(TryRecvError::Empty) => {
-                // Allocate and put our waker instance on the heap and then store it in the state.
-                // The sender will use this to unpark us when it sends or is dropped.
-                // The actor taking this object out of the state is responsible for freeing it.
-                let waker_ptr = Box::into_raw(ReceiverWaker::task_waker(cx));
-                debug_assert_ne!(waker_ptr as usize, states::init());
-                debug_assert_ne!(waker_ptr as usize, states::disconnected());
-                let state = unsafe { &*self.state_ptr }.compare_and_swap(
-                    states::init(),
-                    waker_ptr as usize,
-                    Ordering::SeqCst,
-                );
-                if state == states::init() {
-                    // We stored our waker, now we return and let the sender wake us up
-                    Poll::Pending
-                } else if state == states::disconnected() {
-                    // The sender was dropped before sending anything while we prepared to park.
-                    unsafe { Box::from_raw(waker_ptr) };
-                    Poll::Ready(Err(RecvError))
-                } else {
-                    // The sender sent the message while we prepared to park.
-                    // We take the message and mark the channel disconnected.
-                    unsafe { Box::from_raw(waker_ptr) };
-                    unsafe { &*self.state_ptr }.store(states::disconnected(), Ordering::SeqCst);
-                    Poll::Ready(Ok(take(unsafe { Box::from_raw(state as *mut T) })))
-                }
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let state = unsafe { &*self.state_ptr }.load(Ordering::SeqCst);
+        if state == self.async_waker_ptr {
+            // Our waker is still in the state. We were polled while waiting for the sender.
+            debug_assert_ne!(state, 0);
+            Poll::Pending
+        } else if state == states::init() {
+            // The sender is alive but has not sent anything yet.
+            // Allocate and put our waker instance on the heap and then store it in the state.
+            // The sender will use this to unpark us when it sends or is dropped.
+            // The actor taking this object out of the state is responsible for freeing it.
+            let waker_ptr = Box::into_raw(ReceiverWaker::task_waker(cx));
+            debug_assert_ne!(waker_ptr as usize, states::init());
+            debug_assert_ne!(waker_ptr as usize, states::disconnected());
+            let state = unsafe { &*self.state_ptr }.compare_and_swap(
+                states::init(),
+                waker_ptr as usize,
+                Ordering::SeqCst,
+            );
+            if state == states::init() {
+                // We stored our waker, now we return and let the sender wake us up
+                self.async_waker_ptr = waker_ptr as usize;
+                Poll::Pending
+            } else if state == states::disconnected() {
+                // The sender was dropped before sending anything while we prepared to park.
+                unsafe { Box::from_raw(waker_ptr) };
+                Poll::Ready(Err(RecvError))
+            } else {
+                // The sender sent the message while we prepared to park.
+                // We take the message and mark the channel disconnected.
+                unsafe { Box::from_raw(waker_ptr) };
+                unsafe { &*self.state_ptr }.store(states::disconnected(), Ordering::SeqCst);
+                Poll::Ready(Ok(take(unsafe { Box::from_raw(state as *mut T) })))
             }
-            Err(TryRecvError::Disconnected) => Poll::Ready(Err(RecvError)),
-            Ok(message) => Poll::Ready(Ok(message)),
+        } else if state == states::disconnected() {
+            // The sender was dropped before sending anything, or we already received the message.
+            Poll::Ready(Err(RecvError))
+        } else {
+            // The sender sent the message. We take the message and mark the channel disconnected.
+            unsafe { &*self.state_ptr }.store(states::disconnected(), Ordering::SeqCst);
+            Poll::Ready(Ok(take(unsafe { Box::from_raw(state as *mut T) })))
         }
     }
 }
