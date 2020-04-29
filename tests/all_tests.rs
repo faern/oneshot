@@ -73,7 +73,7 @@ fn send_before_recv_timeout() {
 }
 
 #[cfg(not(loom))]
-#[async_std::test]
+#[tokio::test]
 async fn send_before_await() {
     let (sender, receiver) = oneshot::channel();
     assert!(sender.send(19i128).is_ok());
@@ -119,7 +119,7 @@ fn try_recv_with_dropped_sender() {
 }
 
 #[cfg(not(loom))]
-#[async_std::test]
+#[tokio::test]
 async fn await_with_dropped_sender() {
     let (sender, receiver) = oneshot::channel::<u128>();
     mem::drop(sender);
@@ -153,15 +153,15 @@ fn recv_timeout_before_send() {
 }
 
 #[cfg(not(loom))]
-#[async_std::test]
+#[tokio::test]
 async fn await_before_send() {
     let (sender, receiver) = oneshot::channel();
-    let t = async_std::task::spawn(async move {
-        async_std::task::sleep(Duration::from_millis(2)).await;
+    let t = tokio::spawn(async move {
+        tokio::time::delay_for(Duration::from_millis(2)).await;
         sender.send(9u128)
     });
     assert_eq!(receiver.await, Ok(9));
-    t.await.unwrap();
+    t.await.unwrap().unwrap();
 }
 
 #[test]
@@ -191,15 +191,15 @@ fn recv_timeout_before_send_then_drop_sender() {
 }
 
 #[cfg(not(loom))]
-#[async_std::test]
+#[tokio::test]
 async fn await_before_send_then_drop_sender() {
     let (sender, receiver) = oneshot::channel::<u128>();
-    let t = async_std::task::spawn(async {
-        async_std::task::sleep(Duration::from_millis(10)).await;
+    let t = tokio::spawn(async {
+        tokio::time::delay_for(Duration::from_millis(10)).await;
         mem::drop(sender);
     });
     assert!(receiver.await.is_err());
-    t.await;
+    t.await.unwrap();
 }
 
 #[test]

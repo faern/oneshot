@@ -15,7 +15,9 @@ loom = "0.3.2"
 
 [dev-dependencies]
 criterion = "0.3"
-async-std = { version = "1.5.0", features = ["attributes"] }
+
+[target.'cfg(not(loom))'.dev-dependencies]
+tokio = { version = "0.2.20", features = ["rt-threaded", "macros", "time"] }
 
 [[bench]]
 name = "benches"
