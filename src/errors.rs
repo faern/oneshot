@@ -1,4 +1,3 @@
-use super::Box;
 use core::fmt;
 
 /// An error returned when trying to send on a closed channel. Returned from
@@ -6,17 +5,17 @@ use core::fmt;
 ///
 /// The message that could not be sent can be retreived again with [`SendError::into_inner`].
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct SendError<T>(Box<T>);
+pub struct SendError<T>(T);
 
 impl<T> SendError<T> {
-    pub const fn new(message: Box<T>) -> Self {
+    pub const fn new(message: T) -> Self {
         Self(message)
     }
 
     /// Consumes the error and returns the message that failed to be sent.
     #[inline]
     pub fn into_inner(self) -> T {
-        super::take(self.0)
+        self.0
     }
 
     /// Get a reference to the message that failed to be sent.
