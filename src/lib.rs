@@ -355,28 +355,16 @@ impl<T> Receiver<T> {
                 match state {
                     // We stored our waker, now we park until the sender has changed the state
                     EMPTY => loop {
-                        if let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
+                        let (state, timed_out) = if let Some(timeout) =
+                            deadline.checked_duration_since(Instant::now())
+                        {
                             thread::park_timeout(timeout);
+                            (channel.state.load(Ordering::SeqCst), false)
                         } else {
-                            // We reached the deadline. Take our thread object out of the state again.
-                            match channel.state.swap(EMPTY, Ordering::SeqCst) {
-                                // The sender sent the message while we were parked.
-                                // We take the message and mark the channel disconnected.
-                                MESSAGE => {
-                                    channel.state.store(DISCONNECTED, Ordering::SeqCst);
-                                    break Ok(unsafe { ptr::read(&channel.message).assume_init() });
-                                }
-                                // The sender was dropped while we were parked.
-                                DISCONNECTED => break Err(RecvTimeoutError::Disconnected),
-                                // The sender has not touched the state. We drop waker and return.
-                                RECEIVING => {
-                                    unsafe { ptr::read(&channel.waker).assume_init() };
-                                    break Err(RecvTimeoutError::Timeout);
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        match channel.state.load(Ordering::SeqCst) {
+                            // We reached the deadline. Stop being in the receiving state.
+                            (channel.state.swap(EMPTY, Ordering::SeqCst), true)
+                        };
+                        match state {
                             // The sender sent the message while we were parked.
                             // We take the message and mark the channel disconnected.
                             MESSAGE => {
@@ -386,7 +374,12 @@ impl<T> Receiver<T> {
                             // The sender was dropped while we were parked.
                             DISCONNECTED => break Err(RecvTimeoutError::Disconnected),
                             // State did not change, park again.
-                            RECEIVING => (),
+                            RECEIVING => {
+                                if timed_out {
+                                    unsafe { ptr::read(&channel.waker).assume_init() };
+                                    break Err(RecvTimeoutError::Timeout);
+                                }
+                            }
                             _ => unreachable!(),
                         }
                     },
