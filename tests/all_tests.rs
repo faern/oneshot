@@ -1,4 +1,14 @@
+#[cfg(loom)]
+use loom::sync::{
+    atomic::{AtomicUsize, Ordering::SeqCst},
+    Arc,
+};
 use oneshot::{RecvError, RecvTimeoutError, TryRecvError};
+#[cfg(not(loom))]
+use std::sync::{
+    atomic::{AtomicUsize, Ordering::SeqCst},
+    Arc,
+};
 use std::{
     mem,
     time::{Duration, Instant},
@@ -268,4 +278,60 @@ fn non_send_type_can_be_used_on_same_thread() {
     sender.send(NotSend(ptr::null_mut())).unwrap();
     let reply = receiver.recv().unwrap();
     assert_eq!(reply, NotSend(ptr::null_mut()));
+}
+
+struct DropCounter(Arc<AtomicUsize>);
+
+impl DropCounter {
+    pub fn new() -> (Self, Arc<AtomicUsize>) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        (Self(counter.clone()), counter)
+    }
+}
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, SeqCst);
+    }
+}
+
+#[test]
+fn message_in_channel_dropped_on_receiver_drop() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel();
+        let (message, drop_count) = DropCounter::new();
+        assert_eq!(drop_count.load(SeqCst), 0);
+        sender.send(message).unwrap();
+        assert_eq!(drop_count.load(SeqCst), 0);
+        mem::drop(receiver);
+        assert_eq!(drop_count.load(SeqCst), 1);
+    })
+}
+
+#[test]
+fn send_error_drops_message_correctly() {
+    maybe_loom_model(|| {
+        let (sender, _) = oneshot::channel();
+        let (message, drop_count) = DropCounter::new();
+
+        let send_error = sender.send(message).unwrap_err();
+        assert_eq!(drop_count.load(SeqCst), 0);
+        mem::drop(send_error);
+        assert_eq!(drop_count.load(SeqCst), 1);
+    });
+}
+
+#[test]
+fn send_error_drops_message_correctly_on_into_inner() {
+    maybe_loom_model(|| {
+        let (sender, _) = oneshot::channel();
+        let (message, drop_count) = DropCounter::new();
+
+        let send_error = sender.send(message).unwrap_err();
+        assert_eq!(drop_count.load(SeqCst), 0);
+        let message = send_error.into_inner();
+        assert_eq!(drop_count.load(SeqCst), 0);
+        mem::drop(message);
+        assert_eq!(drop_count.load(SeqCst), 1);
+    });
 }

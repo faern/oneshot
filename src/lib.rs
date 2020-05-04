@@ -82,12 +82,8 @@ impl<T> Sender<T> {
                 unsafe { ptr::read(&channel.waker).assume_init() }.unpark();
                 Ok(())
             }
-            // The receiver was already dropped. We are responsible for freeing the channel.
-            DISCONNECTED => {
-                let message = unsafe { ptr::read(&channel.message).assume_init() };
-                unsafe { Box::from_raw(channel) };
-                Err(SendError::new(message))
-            }
+            // The receiver was already dropped. The error is responsible for freeing the channel.
+            DISCONNECTED => Err(SendError::new(channel)),
             _ => unreachable!(),
         }
     }
