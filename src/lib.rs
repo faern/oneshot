@@ -64,14 +64,16 @@ impl<T> Sender<T> {
     /// Returns an error if the receiver has already been dropped. The message can
     /// be extracted from the error.
     pub fn send(self, message: T) -> Result<(), SendError<T>> {
-        let state_ptr = self.state_ptr;
+        // SAFETY: The reference won't be used after it is freed in this method
+        let channel: &mut State<T> = unsafe { &mut *self.state_ptr };
+
         // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
 
         // Write the message into the state on the heap.
-        unsafe { (*state_ptr).message.as_mut_ptr().write(message) };
+        unsafe { channel.message.as_mut_ptr().write(message) };
         // Set the state to signal there is a message on the channel.
-        let previous_state = unsafe { &*state_ptr }.state.swap(MESSAGE, SeqCst);
+        let previous_state = channel.state.swap(MESSAGE, SeqCst);
         match previous_state {
             // The receiver is alive and has not started waiting. Send done.
             // Receiver takes message and frees the state from the heap.
@@ -80,14 +82,14 @@ impl<T> Sender<T> {
             // The receiver is waiting. Wake it up so it can return the message. The receiver takes
             // the message and frees the state. We take and drop the waker instance in the state.
             RECEIVING => {
-                unsafe { ptr::read(&(*state_ptr).waker).assume_init() }.unpark();
+                unsafe { ptr::read(&channel.waker).assume_init() }.unpark();
                 Ok(())
             }
 
             // The receiver was already dropped. We are responsible for freeing the state.
             DISCONNECTED => {
-                let message = unsafe { ptr::read(&(*state_ptr).message).assume_init() };
-                unsafe { Box::from_raw(state_ptr) };
+                let message = unsafe { ptr::read(&channel.message).assume_init() };
+                unsafe { Box::from_raw(channel) };
                 Err(SendError::new(message))
             }
 
