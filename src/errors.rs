@@ -44,7 +44,7 @@ impl<T> Drop for SendError<T> {
         // SAFETY: The reference won't be used after it is freed in this method
         let channel: &mut super::Channel<T> = unsafe { &mut *self.channel_ptr };
 
-        unsafe { ptr::read(&channel.message).assume_init() };
+        unsafe { ptr::drop_in_place(channel.message.as_mut_ptr()) };
         unsafe { Box::from_raw(channel) };
     }
 }

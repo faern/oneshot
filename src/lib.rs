@@ -168,14 +168,14 @@ impl<T> Receiver<T> {
                     },
                     // The sender sent the message while we prepared to park.
                     MESSAGE => {
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         let message = unsafe { ptr::read(&channel.message).assume_init() };
                         unsafe { Box::from_raw(channel) };
                         Ok(message)
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         unsafe { Box::from_raw(channel) };
                         Err(RecvError)
                     }
@@ -241,12 +241,12 @@ impl<T> Receiver<T> {
                     // The sender sent the message while we prepared to park.
                     MESSAGE => {
                         channel.state.store(DISCONNECTED, SeqCst);
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         Ok(unsafe { ptr::read(&channel.message).assume_init() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         Err(RecvError)
                     }
                     _ => unreachable!(),
@@ -352,7 +352,7 @@ impl<T> Receiver<T> {
                             // State did not change, spurious wakeup, park again.
                             RECEIVING => {
                                 if timed_out {
-                                    unsafe { ptr::read(&channel.waker).assume_init() };
+                                    unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                                     break Err(RecvTimeoutError::Timeout);
                                 }
                             }
@@ -362,12 +362,12 @@ impl<T> Receiver<T> {
                     // The sender sent the message while we prepared to park.
                     MESSAGE => {
                         channel.state.store(DISCONNECTED, SeqCst);
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         Ok(unsafe { ptr::read(&channel.message).assume_init() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         Err(RecvTimeoutError::Disconnected)
                     }
                     _ => unreachable!(),
@@ -405,13 +405,13 @@ impl<T> core::future::Future for Receiver<T> {
                     EMPTY => Poll::Pending,
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         Poll::Ready(Err(RecvError))
                     }
                     // The sender sent the message while we prepared to park.
                     // We take the message and mark the channel disconnected.
                     MESSAGE => {
-                        unsafe { ptr::read(&channel.waker).assume_init() };
+                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
                         channel.state.store(DISCONNECTED, SeqCst);
                         Poll::Ready(Ok(unsafe { ptr::read(&channel.message).assume_init() }))
                     }
@@ -443,7 +443,7 @@ impl<T> Drop for Receiver<T> {
             EMPTY => (),
             // The sender already sent something. We must drop it, and free the channel.
             MESSAGE => {
-                unsafe { ptr::read(&channel.message).assume_init() };
+                unsafe { ptr::drop_in_place(channel.message.as_mut_ptr()) };
                 unsafe { Box::from_raw(channel) };
             }
             // The sender was already dropped. We are responsible for freeing the channel
