@@ -65,21 +65,21 @@ impl<T> Sender<T> {
     /// Returns an error if the receiver has already been dropped. The message can
     /// be extracted from the error.
     pub fn send(self, message: T) -> Result<(), SendError<T>> {
-        // SAFETY: The reference won't be used after it is freed in this method
+        // SAFETY: The channel exists on the heap for the entire duration of this method.
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
 
         // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
 
         // Write the message into the channel on the heap.
-        unsafe { channel.message.as_mut_ptr().write(message) };
+        channel.write_message(message);
         // Set the state to signal there is a message on the channel.
         match channel.state.swap(MESSAGE, SeqCst) {
             // The receiver is alive and has not started waiting. Send done.
             EMPTY => Ok(()),
             // The receiver is waiting. Wake it up so it can return the message.
             RECEIVING => {
-                unsafe { ptr::read(&channel.waker).assume_init() }.unpark();
+                unsafe { channel.take_waker() }.unpark();
                 Ok(())
             }
             // The receiver was already dropped. The error is responsible for freeing the channel.
@@ -91,7 +91,7 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        // SAFETY: The reference won't be used after it is freed in this method
+        // SAFETY: The reference won't be used after the channel is freed in this method
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
 
         // Set the channel state to disconnected and read what state the receiver was in
@@ -99,9 +99,7 @@ impl<T> Drop for Sender<T> {
             // The receiver has not started waiting, nor is it dropped.
             EMPTY => (),
             // The receiver is waiting. Wake it up so it can detect that the channel disconnected.
-            RECEIVING => {
-                unsafe { ptr::read(&channel.waker).assume_init() }.unpark();
-            }
+            RECEIVING => unsafe { channel.take_waker() }.unpark(),
             // The receiver was already dropped. We are responsible for freeing the channel.
             DISCONNECTED => {
                 unsafe { Box::from_raw(channel) };
@@ -126,7 +124,7 @@ impl<T> Receiver<T> {
     /// If a sent message has already been extracted from this channel this method will return an
     /// error.
     pub fn recv(self) -> Result<T, RecvError> {
-        // SAFETY: The reference won't be used after it is freed in this method
+        // SAFETY: The reference won't be used after the channel is freed in this method
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
 
         // Don't run our Drop implementation if we are receiving consuming ourselves.
@@ -142,8 +140,7 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                let waker = ReceiverWaker::current_thread();
-                unsafe { channel.waker.as_mut_ptr().write(waker) };
+                channel.write_waker(ReceiverWaker::current_thread());
 
                 match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
                     // We stored our waker, now we park until the sender has changed the state
@@ -152,7 +149,7 @@ impl<T> Receiver<T> {
                         match channel.state.load(SeqCst) {
                             // The sender sent the message while we were parked.
                             MESSAGE => {
-                                let message = unsafe { ptr::read(&channel.message).assume_init() };
+                                let message = unsafe { channel.take_message() };
                                 unsafe { Box::from_raw(channel) };
                                 break Ok(message);
                             }
@@ -168,14 +165,14 @@ impl<T> Receiver<T> {
                     },
                     // The sender sent the message while we prepared to park.
                     MESSAGE => {
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
-                        let message = unsafe { ptr::read(&channel.message).assume_init() };
+                        unsafe { channel.drop_waker() };
+                        let message = unsafe { channel.take_message() };
                         unsafe { Box::from_raw(channel) };
                         Ok(message)
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
+                        unsafe { channel.drop_waker() };
                         unsafe { Box::from_raw(channel) };
                         Err(RecvError)
                     }
@@ -184,7 +181,7 @@ impl<T> Receiver<T> {
             }
             // The sender already sent the message.
             MESSAGE => {
-                let message = unsafe { ptr::read(&channel.message).assume_init() };
+                let message = unsafe { channel.take_message() };
                 unsafe { Box::from_raw(channel) };
                 Ok(message)
             }
@@ -217,8 +214,7 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                let waker = ReceiverWaker::current_thread();
-                unsafe { channel.waker.as_mut_ptr().write(waker) };
+                channel.write_waker(ReceiverWaker::current_thread());
 
                 match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
                     // We stored our waker, now we park until the sender has changed the state
@@ -229,7 +225,7 @@ impl<T> Receiver<T> {
                             // We take the message and mark the channel disconnected.
                             MESSAGE => {
                                 channel.state.store(DISCONNECTED, SeqCst);
-                                break Ok(unsafe { ptr::read(&channel.message).assume_init() });
+                                break Ok(unsafe { channel.take_message() });
                             }
                             // The sender was dropped while we were parked.
                             DISCONNECTED => break Err(RecvError),
@@ -241,12 +237,12 @@ impl<T> Receiver<T> {
                     // The sender sent the message while we prepared to park.
                     MESSAGE => {
                         channel.state.store(DISCONNECTED, SeqCst);
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
-                        Ok(unsafe { ptr::read(&channel.message).assume_init() })
+                        unsafe { channel.drop_waker() };
+                        Ok(unsafe { channel.take_message() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
+                        unsafe { channel.drop_waker() };
                         Err(RecvError)
                     }
                     _ => unreachable!(),
@@ -255,7 +251,7 @@ impl<T> Receiver<T> {
             // The sender sent the message. We take the message and mark the channel disconnected.
             MESSAGE => {
                 channel.state.store(DISCONNECTED, SeqCst);
-                Ok(unsafe { ptr::read(&channel.message).assume_init() })
+                Ok(unsafe { channel.take_message() })
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(RecvError),
@@ -281,7 +277,7 @@ impl<T> Receiver<T> {
             // The sender sent the message. We take the message and mark the channel disconnected.
             MESSAGE => {
                 channel.state.store(DISCONNECTED, SeqCst);
-                Ok(unsafe { ptr::read(&channel.message).assume_init() })
+                Ok(unsafe { channel.take_message() })
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(TryRecvError::Disconnected),
@@ -326,8 +322,7 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our thread instance to the channel.
-                let waker = ReceiverWaker::current_thread();
-                unsafe { channel.waker.as_mut_ptr().write(waker) };
+                channel.write_waker(ReceiverWaker::current_thread());
 
                 match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
                     // We stored our waker, now we park until the sender has changed the state
@@ -345,14 +340,14 @@ impl<T> Receiver<T> {
                             // The sender sent the message while we were parked.
                             MESSAGE => {
                                 channel.state.store(DISCONNECTED, SeqCst);
-                                break Ok(unsafe { ptr::read(&channel.message).assume_init() });
+                                break Ok(unsafe { channel.take_message() });
                             }
                             // The sender was dropped while we were parked.
                             DISCONNECTED => break Err(RecvTimeoutError::Disconnected),
                             // State did not change, spurious wakeup, park again.
                             RECEIVING => {
                                 if timed_out {
-                                    unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
+                                    unsafe { channel.drop_waker() };
                                     break Err(RecvTimeoutError::Timeout);
                                 }
                             }
@@ -362,12 +357,12 @@ impl<T> Receiver<T> {
                     // The sender sent the message while we prepared to park.
                     MESSAGE => {
                         channel.state.store(DISCONNECTED, SeqCst);
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
-                        Ok(unsafe { ptr::read(&channel.message).assume_init() })
+                        unsafe { channel.drop_waker() };
+                        Ok(unsafe { channel.take_message() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
+                        unsafe { channel.drop_waker() };
                         Err(RecvTimeoutError::Disconnected)
                     }
                     _ => unreachable!(),
@@ -376,7 +371,7 @@ impl<T> Receiver<T> {
             // The sender sent the message.
             MESSAGE => {
                 channel.state.store(DISCONNECTED, SeqCst);
-                Ok(unsafe { ptr::read(&channel.message).assume_init() })
+                Ok(unsafe { channel.take_message() })
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(RecvTimeoutError::Disconnected),
@@ -397,23 +392,22 @@ impl<T> core::future::Future for Receiver<T> {
                 // The sender is alive but has not sent anything yet.
 
                 // Write our thread instance to the channel.
-                let waker = ReceiverWaker::task_waker(cx);
-                unsafe { channel.waker.as_mut_ptr().write(waker) };
+                channel.write_waker(ReceiverWaker::task_waker(cx));
 
                 match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
                     // We stored our waker, now we return and let the sender wake us up
                     EMPTY => Poll::Pending,
                     // The sender was dropped before sending anything while we prepared to park.
                     DISCONNECTED => {
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
+                        unsafe { channel.drop_waker() };
                         Poll::Ready(Err(RecvError))
                     }
                     // The sender sent the message while we prepared to park.
                     // We take the message and mark the channel disconnected.
                     MESSAGE => {
-                        unsafe { ptr::drop_in_place(channel.waker.as_mut_ptr()) };
+                        unsafe { channel.drop_waker() };
                         channel.state.store(DISCONNECTED, SeqCst);
-                        Poll::Ready(Ok(unsafe { ptr::read(&channel.message).assume_init() }))
+                        Poll::Ready(Ok(unsafe { channel.take_message() }))
                     }
                     _ => unreachable!(),
                 }
@@ -423,7 +417,7 @@ impl<T> core::future::Future for Receiver<T> {
             // The sender sent the message.
             MESSAGE => {
                 channel.state.store(DISCONNECTED, SeqCst);
-                Poll::Ready(Ok(unsafe { ptr::read(&channel.message).assume_init() }))
+                Poll::Ready(Ok(unsafe { channel.take_message() }))
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Poll::Ready(Err(RecvError)),
@@ -443,7 +437,7 @@ impl<T> Drop for Receiver<T> {
             EMPTY => (),
             // The sender already sent something. We must drop it, and free the channel.
             MESSAGE => {
-                unsafe { ptr::drop_in_place(channel.message.as_mut_ptr()) };
+                unsafe { channel.drop_message() };
                 unsafe { Box::from_raw(channel) };
             }
             // The sender was already dropped. We are responsible for freeing the channel
@@ -473,6 +467,36 @@ impl<T> Channel<T> {
             message: mem::MaybeUninit::uninit(),
             waker: mem::MaybeUninit::uninit(),
         }
+    }
+
+    #[inline(always)]
+    fn write_message(&mut self, message: T) {
+        unsafe { self.message.as_mut_ptr().write(message) };
+    }
+
+    #[inline(always)]
+    unsafe fn take_message(&mut self) -> T {
+        ptr::read(&self.message).assume_init()
+    }
+
+    #[inline(always)]
+    unsafe fn drop_message(&mut self) {
+        ptr::drop_in_place(self.message.as_mut_ptr());
+    }
+
+    #[inline(always)]
+    fn write_waker(&mut self, waker: ReceiverWaker) {
+        unsafe { self.waker.as_mut_ptr().write(waker) };
+    }
+
+    #[inline(always)]
+    unsafe fn take_waker(&mut self) -> ReceiverWaker {
+        ptr::read(&self.waker).assume_init()
+    }
+
+    #[inline(always)]
+    unsafe fn drop_waker(&mut self) {
+        ptr::drop_in_place(self.waker.as_mut_ptr());
     }
 }
 

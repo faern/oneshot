@@ -1,7 +1,6 @@
 use super::Box;
 use core::fmt;
 use core::mem;
-use core::ptr;
 
 /// An error returned when trying to send on a closed channel. Returned from
 /// [`Sender::send`] if the corresponding [`Receiver`] has already been dropped.
@@ -27,7 +26,7 @@ impl<T> SendError<T> {
         // Don't run destructor if we consumed ourselves. Freeing happens here.
         mem::forget(self);
 
-        let message = unsafe { ptr::read(&channel.message).assume_init() };
+        let message = unsafe { channel.take_message() };
         unsafe { Box::from_raw(channel) };
         message
     }
@@ -44,7 +43,7 @@ impl<T> Drop for SendError<T> {
         // SAFETY: The reference won't be used after it is freed in this method
         let channel: &mut super::Channel<T> = unsafe { &mut *self.channel_ptr };
 
-        unsafe { ptr::drop_in_place(channel.message.as_mut_ptr()) };
+        unsafe { channel.drop_message() };
         unsafe { Box::from_raw(channel) };
     }
 }
