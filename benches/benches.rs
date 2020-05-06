@@ -78,9 +78,13 @@ fn bench(c: &mut Criterion) {
 
 fn bench_try_recv(c: &mut Criterion) {
     let (sender, receiver) = oneshot::channel::<u128>();
-    c.bench_function("try_recv_empty", |b| b.iter(|| receiver.try_recv()));
+    c.bench_function("try_recv_empty", |b| {
+        b.iter(|| receiver.try_recv().unwrap_err())
+    });
     mem::drop(sender);
-    c.bench_function("try_recv_empty_closed", |b| b.iter(|| receiver.try_recv()));
+    c.bench_function("try_recv_empty_closed", |b| {
+        b.iter(|| receiver.try_recv().unwrap_err())
+    });
 }
 
 fn bench_recv_deadline_now(c: &mut Criterion) {
@@ -88,14 +92,14 @@ fn bench_recv_deadline_now(c: &mut Criterion) {
     {
         let (_sender, receiver) = oneshot::channel::<u128>();
         c.bench_function("recv_deadline_now", |b| {
-            b.iter(|| receiver.recv_deadline(now))
+            b.iter(|| receiver.recv_deadline(now).unwrap_err())
         });
     }
     {
         let (sender, receiver) = oneshot::channel::<u128>();
         mem::drop(sender);
         c.bench_function("recv_deadline_now_closed", |b| {
-            b.iter(|| receiver.recv_deadline(now))
+            b.iter(|| receiver.recv_deadline(now).unwrap_err())
         });
     }
 }
@@ -105,14 +109,14 @@ fn bench_recv_timeout_zero(c: &mut Criterion) {
     {
         let (_sender, receiver) = oneshot::channel::<u128>();
         c.bench_function("recv_timeout_zero", |b| {
-            b.iter(|| receiver.recv_timeout(zero))
+            b.iter(|| receiver.recv_timeout(zero).unwrap_err())
         });
     }
     {
         let (sender, receiver) = oneshot::channel::<u128>();
         mem::drop(sender);
         c.bench_function("recv_timeout_zero_closed", |b| {
-            b.iter(|| receiver.recv_timeout(zero))
+            b.iter(|| receiver.recv_timeout(zero).unwrap_err())
         });
     }
 }
