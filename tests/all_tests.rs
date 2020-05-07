@@ -46,10 +46,29 @@ fn send_before_recv_ref() {
 #[test]
 fn send_before_recv() {
     maybe_loom_model(|| {
-        let (sender, receiver) = oneshot::channel();
-        assert!(sender.send(19i128).is_ok());
-        assert_eq!(receiver.recv(), Ok(19i128));
-    })
+        let (sender, receiver) = oneshot::channel::<()>();
+        assert!(sender.send(()).is_ok());
+        assert_eq!(receiver.recv(), Ok(()));
+    });
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<u8>();
+        assert!(sender.send(19).is_ok());
+        assert_eq!(receiver.recv(), Ok(19));
+    });
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<u64>();
+        assert!(sender.send(21).is_ok());
+        assert_eq!(receiver.recv(), Ok(21));
+    });
+    // FIXME: This test does not work with loom. There is something that happens after the
+    // channel object becomes larger than ~500 bytes and that makes an atomic read from the state
+    // result in "signal: 10, SIGBUS: access to undefined memory"
+    #[cfg(not(loom))]
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<[u8; 4096]>();
+        assert!(sender.send([0b10101010; 4096]).is_ok());
+        assert!(receiver.recv().unwrap()[..] == [0b10101010; 4096][..]);
+    });
 }
 
 #[test]
