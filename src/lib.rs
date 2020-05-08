@@ -1,4 +1,38 @@
-//! Oneshot spsc channel working both in and between sync and async environments.
+//! Oneshot spsc channel. The sender's send method is non-blocking, lock- and wait-free[1].
+//! The receiver supports both lock- and wait-free `try_recv` as well as indefinite and time
+//! limited thread blocking receive operations. The receiver also implements `Future` and
+//! supports asynchronously awaiting the message.
+//!
+//! This is a oneshot channel implementation. Meaning each channel instance can only transport
+//! a single message. This has a few nice outcomes. One thing is that the implementation can
+//! be very efficient, utilizing the knowledge that there will only be one message. But more
+//! importantly, it allows the API to be expressed in such a way that certain edge cases
+//! that you don't want to care about when only sending a single message on a channel does not
+//! exist. For example. The sender can't be copied or cloned and the send method takes ownership
+//! and consumes the sender. So you are guaranteed, at the type level, that there can only be
+//! one message sent.
+//!
+//! # Sync vs async
+//!
+//! The main thing motivating this library was that there were no (known to me) channel
+//! implementations allowing you to seamlessly send messages between a normal thread and an async
+//! task, or the other way around. If message passing is the way you are communicating, of course
+//! that should work smoothly between the sync and async parts of the program!
+//!
+//! This library achieves that by having an almost[1] wait-free send operation that can safely
+//! be used in both sync threads and async tasks. The receiver has both thread blocking
+//! receive methods for synchronous usage, and implements `Future` for asynchronous usage.
+//!
+//!
+//! # Asynchronous support
+//!
+//! The receiving endpoint of this channel implements Rust's `Future` trait and can be waited on
+//! in an asynchronous task. This implementation is completely executor/runtime agnostic. It should
+//! be possible to use this library with any executor.
+//!
+//! # Footnotes
+//!
+//! [1]: See documentation on [Sender::send] for situations where it might not be fully wait-free.
 
 #![deny(rust_2018_idioms)]
 
@@ -60,10 +94,18 @@ unsafe impl<T: Send> Send for Receiver<T> {}
 impl<T> Unpin for Receiver<T> {}
 
 impl<T> Sender<T> {
-    /// Sends `message` over the channel to the [`Receiver`].
+    /// Sends `message` over the channel to the corresponding [`Receiver`].
     ///
     /// Returns an error if the receiver has already been dropped. The message can
     /// be extracted from the error.
+    ///
+    /// This method is completely lock-free and wait-free when sending on a channel that the
+    /// receiver is currently not receiving on. If the receiver is receiving during the send
+    /// operation this method includes waking up the thread/task. Unparking a thread currently
+    /// involves a mutex in Rust's standard library. How lock-free waking up an async task is
+    /// depends on your executor. If this method returns a `SendError`, please mind that dropping
+    /// the error involves running any drop implementation on the message type, which might or
+    /// might not be lock-free.
     pub fn send(self, message: T) -> Result<(), SendError<T>> {
         // SAFETY: The channel exists on the heap for the entire duration of this method.
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -113,7 +155,7 @@ impl<T> Receiver<T> {
     /// Attempts to wait for a message from the [`Sender`], returning an error if the channel is
     /// disconnected.
     ///
-    /// This method will always block the current thread if there is no data available and it's
+    /// This method will always block the current thread if there is no data available and it is
     /// still possible for the message to be sent. Once the message is sent to the corresponding
     /// [`Sender`], then this receiver will wake up and return that message.
     ///
@@ -123,6 +165,10 @@ impl<T> Receiver<T> {
     ///
     /// If a sent message has already been extracted from this channel this method will return an
     /// error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after this receiver has been polled asynchronously.
     pub fn recv(self) -> Result<T, RecvError> {
         // SAFETY: The reference won't be used after the channel is freed in this method
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -134,8 +180,8 @@ impl<T> Receiver<T> {
             // The sender is alive but has not sent anything yet. We prepare to park.
             EMPTY => {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
-                // the sender manages to be dropped or send something before we are able to store our
-                // `Thread` object in the state.
+                // the sender manages to be dropped or send something before we are able to store
+                // our waker object in the channel.
                 #[cfg(oneshot_test_delay)]
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
@@ -202,6 +248,10 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after this receiver has been polled asynchronously.
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         // SAFETY: The channel will not be freed while this method is still running.
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -210,8 +260,8 @@ impl<T> Receiver<T> {
             // The sender is alive but has not sent anything yet. We prepare to park.
             EMPTY => {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
-                // the sender manages to be dropped or send something before we are able to store our
-                // `Thread` object in the channel.
+                // the sender manages to be dropped or send something before we are able to store
+                // our waker object in the channel.
                 #[cfg(oneshot_test_delay)]
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
@@ -265,12 +315,17 @@ impl<T> Receiver<T> {
 
     /// Checks if there is a message in the channel without blocking. Returns:
     ///  * `Ok(message)` if there was a message in the channel.
-    ///  * `Err(Empty)` if the sender is alive, but has not yet sent a message.
-    ///  * `Err(Disconnected)` if the sender was dropped before sending anything or if the message
-    ///    has already been extracted by a previous receive call.
+    ///  * `Err(Empty)` if the [`Sender`] is alive, but has not yet sent a message.
+    ///  * `Err(Disconnected)` if the [`Sender`] was dropped before sending anything or if the
+    ///    message has already been extracted by a previous receive call.
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
+    ///
+    /// This method is completely lock-free and wait-free. The only thing it does is an atomic
+    /// integer load of the channel state. And if there is a message in the channel it additionally
+    /// performs one atomic integer store and copies the message from the heap to the stack for
+    /// returning it.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         // SAFETY: The channel will not be freed while this method is still running.
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -299,6 +354,13 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
+    ///
+    /// If the supplied `timeout` is so large that Rust's `Instant` type can't represent this point
+    /// in the future this falls back to an indefinitely blocking receive operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after this receiver has been polled asynchronously.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self.recv_deadline(deadline),
@@ -314,6 +376,10 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after this receiver has been polled asynchronously.
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         // SAFETY: The channel will not be freed while this method is still running.
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -322,8 +388,8 @@ impl<T> Receiver<T> {
             // The sender is alive but has not sent anything yet. We prepare to park.
             EMPTY => {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
-                // the sender manages to be dropped or send something before we are able to store our
-                // `Thread` object in the channel.
+                // the sender manages to be dropped or send something before we are able to store
+                // our waker object in the channel.
                 #[cfg(oneshot_test_delay)]
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
@@ -457,11 +523,29 @@ impl<T> Drop for Receiver<T> {
     }
 }
 
-const EMPTY: u8 = 0;
-const MESSAGE: u8 = 1;
-const RECEIVING: u8 = 2;
-const DISCONNECTED: u8 = 3;
+/// All the values that the `Channel::state` field can have during the lifetime of a channel.
+mod states {
+    /// The initial channel state. Active while both endpoints are still alive, no message has been
+    /// sent, and the receiver is not receiving.
+    pub const EMPTY: u8 = 0;
+    /// A message has been sent to the channel, but the receiver has not yet read it.
+    pub const MESSAGE: u8 = 1;
+    /// No message has yet been sent on the channel, but the receiver is currently receiving.
+    pub const RECEIVING: u8 = 2;
+    /// The channel has been closed. This means that either the sender or receiver has been dropped,
+    /// or the message sent to the channel has already been received. Since this is a oneshot
+    /// channel, it is disconnected after the one message it is supposed to hold has been
+    /// transmitted.
+    pub const DISCONNECTED: u8 = 3;
+}
+use states::*;
 
+/// Internal channel data structure structure. the `channel` method allocates and puts one instance
+/// of this struct on the heap for each oneshot channel instance. The struct holds:
+/// * The current state of the channel.
+/// * The message in the channel. This memory is uninitialized until the message is sent.
+/// * The waker instance for the thread or task that is currently receiving on this channel.
+///   This memory is uninitialized until the receiver starts receiving.
 struct Channel<T> {
     state: AtomicU8,
     message: mem::MaybeUninit<T>,
