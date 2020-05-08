@@ -190,6 +190,8 @@ impl<T> Receiver<T> {
                 unsafe { Box::from_raw(channel) };
                 Err(RecvError)
             }
+            // The receiver must have been `Future::poll`ed prior to this call.
+            RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -255,6 +257,8 @@ impl<T> Receiver<T> {
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(RecvError),
+            // The receiver must have been `Future::poll`ed prior to this call.
+            RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -281,6 +285,8 @@ impl<T> Receiver<T> {
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(TryRecvError::Disconnected),
+            // The receiver must have already been `Future::poll`ed. No message available.
+            RECEIVING => Err(TryRecvError::Empty),
             _ => unreachable!(),
         }
     }
@@ -375,6 +381,8 @@ impl<T> Receiver<T> {
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(RecvTimeoutError::Disconnected),
+            // The receiver must have been `Future::poll`ed prior to this call.
+            RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -523,3 +531,6 @@ impl ReceiverWaker {
         }
     }
 }
+
+const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
+    "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";

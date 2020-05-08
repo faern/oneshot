@@ -231,6 +231,35 @@ async fn await_before_send_then_drop_sender() {
     t.await.unwrap();
 }
 
+// Tests that the Receiver handles being used synchronously even after being polled
+#[cfg(not(loom))]
+#[tokio::test]
+async fn poll_future_and_then_try_recv() {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{self, Poll};
+
+    struct StupidReceiverFuture(oneshot::Receiver<()>);
+
+    impl Future for StupidReceiverFuture {
+        type Output = Result<(), oneshot::RecvError>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+            let poll_result = Future::poll(Pin::new(&mut self.0), cx);
+            self.0.try_recv().expect_err("Should never be a message");
+            poll_result
+        }
+    }
+
+    let (sender, receiver) = oneshot::channel();
+    let t = tokio::spawn(async {
+        tokio::time::delay_for(Duration::from_millis(20)).await;
+        mem::drop(sender);
+    });
+    StupidReceiverFuture(receiver).await.unwrap_err();
+    t.await.unwrap();
+}
+
 #[test]
 fn try_recv() {
     maybe_loom_model(|| {
