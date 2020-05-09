@@ -1,26 +1,33 @@
+use core::mem;
+use oneshot::TryRecvError;
+
 #[cfg(loom)]
 use loom::sync::{
     atomic::{AtomicUsize, Ordering::SeqCst},
     Arc,
 };
-use oneshot::{RecvError, RecvTimeoutError, TryRecvError};
 #[cfg(not(loom))]
 use std::sync::{
     atomic::{AtomicUsize, Ordering::SeqCst},
     Arc,
 };
-use std::{
-    mem,
-    time::{Duration, Instant},
-};
 
+#[cfg(feature = "std")]
+use oneshot::{RecvError, RecvTimeoutError};
+#[cfg(feature = "std")]
+use std::time::{Duration, Instant};
+
+#[cfg(feature = "std")]
 mod thread {
-    pub use std::thread::sleep;
-
     #[cfg(loom)]
     pub use loom::thread::spawn;
     #[cfg(not(loom))]
-    pub use std::thread::spawn;
+    pub use std::thread::{sleep, spawn};
+
+    #[cfg(loom)]
+    pub fn sleep(_timeout: core::time::Duration) {
+        loom::thread::yield_now()
+    }
 }
 
 fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
@@ -30,6 +37,7 @@ fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
     test();
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn send_before_recv_ref() {
     maybe_loom_model(|| {
@@ -43,6 +51,7 @@ fn send_before_recv_ref() {
     })
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn send_before_recv() {
     maybe_loom_model(|| {
@@ -79,11 +88,15 @@ fn send_before_try_recv() {
 
         assert_eq!(receiver.try_recv(), Ok(19i128));
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
-        assert_eq!(receiver.recv_ref(), Err(RecvError));
-        assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
+        #[cfg(feature = "std")]
+        {
+            assert_eq!(receiver.recv_ref(), Err(RecvError));
+            assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
+        }
     })
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn send_before_recv_timeout() {
     maybe_loom_model(|| {
@@ -101,6 +114,7 @@ fn send_before_recv_timeout() {
     })
 }
 
+#[cfg(feature = "async")]
 #[cfg(not(loom))]
 #[tokio::test]
 async fn send_before_await() {
@@ -129,6 +143,7 @@ fn send_with_dropped_receiver() {
     })
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn recv_with_dropped_sender() {
     maybe_loom_model(|| {
@@ -147,14 +162,7 @@ fn try_recv_with_dropped_sender() {
     })
 }
 
-#[cfg(not(loom))]
-#[tokio::test]
-async fn await_with_dropped_sender() {
-    let (sender, receiver) = oneshot::channel::<u128>();
-    mem::drop(sender);
-    receiver.await.unwrap_err();
-}
-
+#[cfg(feature = "std")]
 #[test]
 fn recv_before_send() {
     maybe_loom_model(|| {
@@ -168,6 +176,7 @@ fn recv_before_send() {
     })
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn recv_timeout_before_send() {
     maybe_loom_model(|| {
@@ -181,18 +190,7 @@ fn recv_timeout_before_send() {
     })
 }
 
-#[cfg(not(loom))]
-#[tokio::test]
-async fn await_before_send() {
-    let (sender, receiver) = oneshot::channel();
-    let t = tokio::spawn(async move {
-        tokio::time::delay_for(Duration::from_millis(2)).await;
-        sender.send(9u128)
-    });
-    assert_eq!(receiver.await, Ok(9));
-    t.await.unwrap().unwrap();
-}
-
+#[cfg(feature = "std")]
 #[test]
 fn recv_before_send_then_drop_sender() {
     maybe_loom_model(|| {
@@ -206,6 +204,7 @@ fn recv_before_send_then_drop_sender() {
     })
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn recv_timeout_before_send_then_drop_sender() {
     maybe_loom_model(|| {
@@ -219,6 +218,7 @@ fn recv_timeout_before_send_then_drop_sender() {
     })
 }
 
+#[cfg(feature = "async")]
 #[cfg(not(loom))]
 #[tokio::test]
 async fn await_before_send_then_drop_sender() {
@@ -232,6 +232,7 @@ async fn await_before_send_then_drop_sender() {
 }
 
 // Tests that the Receiver handles being used synchronously even after being polled
+#[cfg(feature = "async")]
 #[cfg(not(loom))]
 #[tokio::test]
 async fn poll_future_and_then_try_recv() {
@@ -269,6 +270,7 @@ fn try_recv() {
     })
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn recv_deadline_and_timeout_no_time() {
     maybe_loom_model(|| {
@@ -290,6 +292,7 @@ fn recv_deadline_and_timeout_no_time() {
     })
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn recv_deadline_and_timeout_time_should_elapse() {
     maybe_loom_model(|| {
@@ -324,7 +327,7 @@ fn non_send_type_can_be_used_on_same_thread() {
 
     let (sender, receiver) = oneshot::channel();
     sender.send(NotSend(ptr::null_mut())).unwrap();
-    let reply = receiver.recv().unwrap();
+    let reply = receiver.try_recv().unwrap();
     assert_eq!(reply, NotSend(ptr::null_mut()));
 }
 

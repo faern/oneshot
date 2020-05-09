@@ -1,7 +1,8 @@
-use std::thread;
-use std::time::Duration;
-
+#[cfg(feature = "std")]
 fn main() {
+    use std::thread;
+    use std::time::Duration;
+
     let (sender, receiver) = oneshot::channel();
     let t = thread::spawn(move || {
         thread::sleep(Duration::from_millis(2));
@@ -9,4 +10,9 @@ fn main() {
     });
     assert_eq!(receiver.recv_timeout(Duration::from_millis(100)), Ok(9));
     t.join().unwrap();
+}
+
+#[cfg(not(feature = "std"))]
+fn main() {
+    panic!("This example is only for when the \"sync\" feature is used");
 }

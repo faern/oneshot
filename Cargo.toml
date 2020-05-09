@@ -11,9 +11,16 @@ blocking receive operations as well as Future based async polling.
 """
 
 repository = "https://github.com/faern/oneshot"
-keywords = ["oneshot", "spsc", "async", "sync", "channel"]
+keywords = ["oneshot", "spsc", "async", "std", "channel"]
 categories = ["asynchronous", "concurrency"]
 edition = "2018"
+
+[features]
+default = ["std", "async"]
+# Enables usage of libstd. Adds support for thread blocking receive methods.
+std = []
+# Enables async receiving by implementing Future
+async = []
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.3.2"

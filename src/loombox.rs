@@ -1,5 +1,5 @@
+use core::{borrow, fmt, hash, mem, ptr};
 use loom::alloc;
-use std::{borrow, fmt, hash, mem, ptr};
 
 pub struct Box<T: ?Sized> {
     ptr: *mut T,
@@ -42,7 +42,7 @@ impl<T: ?Sized> Drop for Box<T> {
 unsafe impl<T: Send> Send for Box<T> {}
 unsafe impl<T: Sync> Sync for Box<T> {}
 
-impl<T: ?Sized> std::ops::Deref for Box<T> {
+impl<T: ?Sized> core::ops::Deref for Box<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -50,7 +50,7 @@ impl<T: ?Sized> std::ops::Deref for Box<T> {
     }
 }
 
-impl<T: ?Sized> std::ops::DerefMut for Box<T> {
+impl<T: ?Sized> core::ops::DerefMut for Box<T> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.ptr }
     }

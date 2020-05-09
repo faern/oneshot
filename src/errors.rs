@@ -60,6 +60,7 @@ impl<T> fmt::Debug for SendError<T> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<T> std::error::Error for SendError<T> {}
 
 /// An error returned from the indefinitely blocking recv functions on a [`Receiver`].
@@ -75,6 +76,7 @@ impl fmt::Display for RecvError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for RecvError {}
 
 /// An error returned when trying a non blocking receive on a [`Receiver`].
@@ -98,6 +100,7 @@ impl fmt::Display for TryRecvError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for TryRecvError {}
 
 /// An error returned when trying a time limited blocking receive on a [`Receiver`].
@@ -121,4 +124,5 @@ impl fmt::Display for RecvTimeoutError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for RecvTimeoutError {}

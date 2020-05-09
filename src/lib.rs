@@ -35,17 +35,27 @@
 //! [1]: See documentation on [Sender::send] for situations where it might not be fully wait-free.
 
 #![deny(rust_2018_idioms)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
-use core::mem;
-use core::pin::Pin;
-use core::ptr;
+#[cfg(not(loom))]
+extern crate alloc;
+
+use core::{mem, ptr};
+
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicU8, Ordering::SeqCst};
-use core::task::{self, Poll};
 #[cfg(loom)]
 use loom::sync::atomic::{AtomicU8, Ordering::SeqCst};
+
+#[cfg(feature = "async")]
+use core::{
+    pin::Pin,
+    task::{self, Poll},
+};
+#[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "std")]
 mod thread {
     pub use std::thread::{current, Thread};
 
@@ -62,10 +72,10 @@ mod thread {
 
 #[cfg(loom)]
 mod loombox;
+#[cfg(not(loom))]
+use alloc::boxed::Box;
 #[cfg(loom)]
 use loombox::Box;
-#[cfg(not(loom))]
-use std::boxed::Box;
 
 mod errors;
 pub use errors::{RecvError, RecvTimeoutError, SendError, TryRecvError};
@@ -169,6 +179,7 @@ impl<T> Receiver<T> {
     /// # Panics
     ///
     /// Panics if called after this receiver has been polled asynchronously.
+    #[cfg(feature = "std")]
     pub fn recv(self) -> Result<T, RecvError> {
         // SAFETY: The reference won't be used after the channel is freed in this method
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -237,6 +248,7 @@ impl<T> Receiver<T> {
                 Err(RecvError)
             }
             // The receiver must have been `Future::poll`ed prior to this call.
+            #[cfg(feature = "async")]
             RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
@@ -252,6 +264,7 @@ impl<T> Receiver<T> {
     /// # Panics
     ///
     /// Panics if called after this receiver has been polled asynchronously.
+    #[cfg(feature = "std")]
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         // SAFETY: The channel will not be freed while this method is still running.
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -308,6 +321,7 @@ impl<T> Receiver<T> {
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(RecvError),
             // The receiver must have been `Future::poll`ed prior to this call.
+            #[cfg(feature = "async")]
             RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
@@ -341,6 +355,7 @@ impl<T> Receiver<T> {
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(TryRecvError::Disconnected),
             // The receiver must have already been `Future::poll`ed. No message available.
+            #[cfg(feature = "async")]
             RECEIVING => Err(TryRecvError::Empty),
             _ => unreachable!(),
         }
@@ -361,6 +376,7 @@ impl<T> Receiver<T> {
     /// # Panics
     ///
     /// Panics if called after this receiver has been polled asynchronously.
+    #[cfg(feature = "std")]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self.recv_deadline(deadline),
@@ -380,6 +396,7 @@ impl<T> Receiver<T> {
     /// # Panics
     ///
     /// Panics if called after this receiver has been polled asynchronously.
+    #[cfg(feature = "std")]
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         // SAFETY: The channel will not be freed while this method is still running.
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
@@ -448,12 +465,14 @@ impl<T> Receiver<T> {
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(RecvTimeoutError::Disconnected),
             // The receiver must have been `Future::poll`ed prior to this call.
+            #[cfg(feature = "async")]
             RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
 }
 
+#[cfg(feature = "async")]
 impl<T> core::future::Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
@@ -576,6 +595,7 @@ impl<T> Channel<T> {
         ptr::drop_in_place(self.message.as_mut_ptr());
     }
 
+    #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     fn write_waker(&mut self, waker: ReceiverWaker) {
         unsafe { self.waker.as_mut_ptr().write(waker) };
@@ -586,6 +606,7 @@ impl<T> Channel<T> {
         ptr::read(&self.waker).assume_init()
     }
 
+    #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn drop_waker(&mut self) {
         ptr::drop_in_place(self.waker.as_mut_ptr());
@@ -594,27 +615,34 @@ impl<T> Channel<T> {
 
 enum ReceiverWaker {
     /// The receiver is waiting synchronously. Its thread is parked.
+    #[cfg(feature = "std")]
     Thread(thread::Thread),
     /// The receiver is waiting asynchronously. Its task can be woken up with this `Waker`.
+    #[cfg(feature = "async")]
     Task(task::Waker),
 }
 
 impl ReceiverWaker {
+    #[cfg(feature = "std")]
     pub fn current_thread() -> Self {
         Self::Thread(thread::current())
     }
 
+    #[cfg(feature = "async")]
     pub fn task_waker(cx: &task::Context<'_>) -> Self {
         Self::Task(cx.waker().clone())
     }
 
     pub fn unpark(self) {
         match self {
+            #[cfg(feature = "std")]
             ReceiverWaker::Thread(thread) => thread.unpark(),
+            #[cfg(feature = "async")]
             ReceiverWaker::Task(waker) => waker.wake(),
         }
     }
 }
 
+#[cfg(all(feature = "std", feature = "async"))]
 const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
     "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
