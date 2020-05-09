@@ -23,7 +23,6 @@
 //! be used in both sync threads and async tasks. The receiver has both thread blocking
 //! receive methods for synchronous usage, and implements `Future` for asynchronous usage.
 //!
-//!
 //! # Asynchronous support
 //!
 //! The receiving endpoint of this channel implements Rust's `Future` trait and can be waited on
@@ -33,6 +32,43 @@
 //! # Footnotes
 //!
 //! [1]: See documentation on [Sender::send] for situations where it might not be fully wait-free.
+
+// # Implementation description
+//
+// When a channel is created via the channel function, it allocates space on the heap to fit:
+// * A one byte atomic integer that represents the current channel state,
+// * Uninitialized memory to fit the message,
+// * Uninitialized memory to fit the waker that can wake the receiving task or thread up.
+//
+// The size of the waker depends on which features are activated, it ranges from 0 to 24 bytes[1].
+// So with all features enabled (the default) each channel allocates 25 bytes plus the size of the
+// message, plus any padding needed to get correct memory alignment.
+//
+// The Sender and Receiver only holds a raw pointer to this heap channel object. The last endpoint
+// to be consumed or dropped is responsible for freeing the heap memory. The first endpoint to
+// go away signal via the state that it is gone. And the second one see this and frees the memory.
+//
+// Sending on the sender copies the message to the (so far uninitialized) memory region on the
+// heap and swaps the state from whatever it was to MESSAGE.
+// if the state before the swap was DISCONNECTED the SendError is returned and nothing else is done.
+// The SendError now owns the heap channel memory and is responsible for dropping the message
+// and freeing the memory.
+// If the state was RECEIVING the sender reads the waker object from the channel heap memory and
+// call the unpark method, which will wake up the receiver.
+//
+// Receiving on the channel first checks the state. If it is MESSAGE the message object is read
+// from the heap back into the stack, the heap memory is freed and the message returned. If the
+// state is DISCONNECTED the heap memory is freed and an error is returned. And if the state is
+// EMPTY and the receive operation is a blocking one it creates a waker object and writes it to
+// the channel on the heap and does an atomic compare_and_swap on the state from EMPTY to RECEIVING.
+// If the swap went fine, it either parks the thread or returns Poll::Pending, depending on if
+// the receive is a blocking or an async one. It now just waits for the sender to wake it up.
+//
+//
+// ## Footnotes
+//
+// [1]: Mind that the waker only takes zero bytes when all features are disabled, making it
+//      impossible to *wait* for the message. `try_recv` the only available method in this scenario.
 
 #![deny(rust_2018_idioms)]
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -641,6 +677,17 @@ impl ReceiverWaker {
             ReceiverWaker::Task(waker) => waker.wake(),
         }
     }
+}
+
+#[test]
+fn receiver_waker_size() {
+    let expected: usize = match (cfg!(feature = "std"), cfg!(feature = "async")) {
+        (false, false) => 0,
+        (false, true) => 16,
+        (true, false) => 8,
+        (true, true) => 24,
+    };
+    assert_eq!(mem::size_of::<ReceiverWaker>(), expected);
 }
 
 #[cfg(all(feature = "std", feature = "async"))]
