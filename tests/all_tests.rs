@@ -1,17 +1,6 @@
 use core::mem;
 use oneshot::TryRecvError;
 
-#[cfg(loom)]
-use loom::sync::{
-    atomic::{AtomicUsize, Ordering::SeqCst},
-    Arc,
-};
-#[cfg(not(loom))]
-use std::sync::{
-    atomic::{AtomicUsize, Ordering::SeqCst},
-    Arc,
-};
-
 #[cfg(feature = "std")]
 use oneshot::{RecvError, RecvTimeoutError};
 #[cfg(feature = "std")]
@@ -29,6 +18,9 @@ mod thread {
         loom::thread::yield_now()
     }
 }
+
+mod helpers;
+use helpers::DropCounter;
 
 fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
     #[cfg(loom)]
@@ -112,15 +104,6 @@ fn send_before_recv_timeout() {
         assert!(receiver.try_recv().is_err());
         assert!(receiver.recv().is_err());
     })
-}
-
-#[cfg(feature = "async")]
-#[cfg(not(loom))]
-#[tokio::test]
-async fn send_before_await() {
-    let (sender, receiver) = oneshot::channel();
-    assert!(sender.send(19i128).is_ok());
-    assert_eq!(receiver.await, Ok(19i128));
 }
 
 #[test]
@@ -218,49 +201,6 @@ fn recv_timeout_before_send_then_drop_sender() {
     })
 }
 
-#[cfg(feature = "async")]
-#[cfg(not(loom))]
-#[tokio::test]
-async fn await_before_send_then_drop_sender() {
-    let (sender, receiver) = oneshot::channel::<u128>();
-    let t = tokio::spawn(async {
-        tokio::time::delay_for(Duration::from_millis(10)).await;
-        mem::drop(sender);
-    });
-    assert!(receiver.await.is_err());
-    t.await.unwrap();
-}
-
-// Tests that the Receiver handles being used synchronously even after being polled
-#[cfg(feature = "async")]
-#[cfg(not(loom))]
-#[tokio::test]
-async fn poll_future_and_then_try_recv() {
-    use core::future::Future;
-    use core::pin::Pin;
-    use core::task::{self, Poll};
-
-    struct StupidReceiverFuture(oneshot::Receiver<()>);
-
-    impl Future for StupidReceiverFuture {
-        type Output = Result<(), oneshot::RecvError>;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-            let poll_result = Future::poll(Pin::new(&mut self.0), cx);
-            self.0.try_recv().expect_err("Should never be a message");
-            poll_result
-        }
-    }
-
-    let (sender, receiver) = oneshot::channel();
-    let t = tokio::spawn(async {
-        tokio::time::delay_for(Duration::from_millis(20)).await;
-        mem::drop(sender);
-    });
-    StupidReceiverFuture(receiver).await.unwrap_err();
-    t.await.unwrap();
-}
-
 #[test]
 fn try_recv() {
     maybe_loom_model(|| {
@@ -331,31 +271,16 @@ fn non_send_type_can_be_used_on_same_thread() {
     assert_eq!(reply, NotSend(ptr::null_mut()));
 }
 
-struct DropCounter(Arc<AtomicUsize>);
-
-impl DropCounter {
-    pub fn new() -> (Self, Arc<AtomicUsize>) {
-        let counter = Arc::new(AtomicUsize::new(0));
-        (Self(counter.clone()), counter)
-    }
-}
-
-impl Drop for DropCounter {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, SeqCst);
-    }
-}
-
 #[test]
 fn message_in_channel_dropped_on_receiver_drop() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
-        let (message, drop_count) = DropCounter::new();
-        assert_eq!(drop_count.load(SeqCst), 0);
+        let (message, counter) = DropCounter::new(());
+        assert_eq!(counter.count(), 0);
         sender.send(message).unwrap();
-        assert_eq!(drop_count.load(SeqCst), 0);
+        assert_eq!(counter.count(), 0);
         mem::drop(receiver);
-        assert_eq!(drop_count.load(SeqCst), 1);
+        assert_eq!(counter.count(), 1);
     })
 }
 
@@ -363,12 +288,12 @@ fn message_in_channel_dropped_on_receiver_drop() {
 fn send_error_drops_message_correctly() {
     maybe_loom_model(|| {
         let (sender, _) = oneshot::channel();
-        let (message, drop_count) = DropCounter::new();
+        let (message, counter) = DropCounter::new(());
 
         let send_error = sender.send(message).unwrap_err();
-        assert_eq!(drop_count.load(SeqCst), 0);
+        assert_eq!(counter.count(), 0);
         mem::drop(send_error);
-        assert_eq!(drop_count.load(SeqCst), 1);
+        assert_eq!(counter.count(), 1);
     });
 }
 
@@ -376,13 +301,13 @@ fn send_error_drops_message_correctly() {
 fn send_error_drops_message_correctly_on_into_inner() {
     maybe_loom_model(|| {
         let (sender, _) = oneshot::channel();
-        let (message, drop_count) = DropCounter::new();
+        let (message, counter) = DropCounter::new(());
 
         let send_error = sender.send(message).unwrap_err();
-        assert_eq!(drop_count.load(SeqCst), 0);
+        assert_eq!(counter.count(), 0);
         let message = send_error.into_inner();
-        assert_eq!(drop_count.load(SeqCst), 0);
+        assert_eq!(counter.count(), 0);
         mem::drop(message);
-        assert_eq!(drop_count.load(SeqCst), 1);
+        assert_eq!(counter.count(), 1);
     });
 }

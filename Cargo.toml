@@ -30,6 +30,7 @@ criterion = "0.3"
 
 [target.'cfg(not(loom))'.dev-dependencies]
 tokio = { version = "0.2.20", features = ["rt-threaded", "macros", "time"] }
+async-std = { version = "1.5.0", features = ["attributes"] }
 
 [[bench]]
 name = "benches"
