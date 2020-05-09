@@ -11,7 +11,7 @@ blocking receive operations as well as Future based async polling.
 """
 
 repository = "https://github.com/faern/oneshot"
-keywords = ["oneshot", "spsc", "async", "std", "channel"]
+keywords = ["oneshot", "spsc", "async", "sync", "channel"]
 categories = ["asynchronous", "concurrency"]
 edition = "2018"
 
