@@ -79,12 +79,12 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     (Sender { channel_ptr }, Receiver { channel_ptr })
 }
 
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug)]
 pub struct Sender<T> {
     channel_ptr: *mut Channel<T>,
 }
 
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug)]
 pub struct Receiver<T> {
     channel_ptr: *mut Channel<T>,
 }
