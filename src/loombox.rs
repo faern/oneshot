@@ -12,18 +12,6 @@ impl<T> Box<T> {
         unsafe { ptr::write(ptr, value) };
         Self { ptr }
     }
-
-    /// Consumes the box and returns the value in it.
-    /// This is a a workaround. The standard library `Box` does not have this. Instead a
-    /// a standard box can be dereferenced like `*std_box` to get the `T`. This can't be implemented
-    /// outside of the standard library due to magic. so we need this workaround.
-    pub fn into_value(self) -> T {
-        let value = unsafe { ptr::read(self.ptr) };
-        let layout = alloc::Layout::new::<T>();
-        unsafe { alloc::dealloc(self.ptr as *mut u8, layout) };
-        mem::forget(self);
-        value
-    }
 }
 
 impl<T: ?Sized> Box<T> {
