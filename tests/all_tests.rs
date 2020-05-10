@@ -29,17 +29,19 @@ fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
     test();
 }
 
-#[cfg(feature = "std")]
 #[test]
-fn send_before_recv_ref() {
+fn send_before_try_recv() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
         assert!(sender.send(19i128).is_ok());
 
-        assert_eq!(receiver.recv_ref(), Ok(19i128));
-        assert_eq!(receiver.recv_ref(), Err(RecvError));
+        assert_eq!(receiver.try_recv(), Ok(19i128));
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
-        assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
+        #[cfg(feature = "std")]
+        {
+            assert_eq!(receiver.recv_ref(), Err(RecvError));
+            assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
+        }
     })
 }
 
@@ -72,19 +74,17 @@ fn send_before_recv() {
     });
 }
 
+#[cfg(feature = "std")]
 #[test]
-fn send_before_try_recv() {
+fn send_before_recv_ref() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
         assert!(sender.send(19i128).is_ok());
 
-        assert_eq!(receiver.try_recv(), Ok(19i128));
+        assert_eq!(receiver.recv_ref(), Ok(19i128));
+        assert_eq!(receiver.recv_ref(), Err(RecvError));
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
-        #[cfg(feature = "std")]
-        {
-            assert_eq!(receiver.recv_ref(), Err(RecvError));
-            assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
-        }
+        assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
     })
 }
 
@@ -126,6 +126,15 @@ fn send_with_dropped_receiver() {
     })
 }
 
+#[test]
+fn try_recv_with_dropped_sender() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<u128>();
+        mem::drop(sender);
+        receiver.try_recv().unwrap_err();
+    })
+}
+
 #[cfg(feature = "std")]
 #[test]
 fn recv_with_dropped_sender() {
@@ -133,15 +142,6 @@ fn recv_with_dropped_sender() {
         let (sender, receiver) = oneshot::channel::<u128>();
         mem::drop(sender);
         receiver.recv().unwrap_err();
-    })
-}
-
-#[test]
-fn try_recv_with_dropped_sender() {
-    maybe_loom_model(|| {
-        let (sender, receiver) = oneshot::channel::<u128>();
-        mem::drop(sender);
-        receiver.try_recv().unwrap_err();
     })
 }
 

@@ -258,6 +258,40 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
+    /// Checks if there is a message in the channel without blocking. Returns:
+    ///  * `Ok(message)` if there was a message in the channel.
+    ///  * `Err(Empty)` if the [`Sender`] is alive, but has not yet sent a message.
+    ///  * `Err(Disconnected)` if the [`Sender`] was dropped before sending anything or if the
+    ///    message has already been extracted by a previous receive call.
+    ///
+    /// If a message is returned, the channel is disconnected and any subsequent receive operation
+    /// using this receiver will return an error.
+    ///
+    /// This method is completely lock-free and wait-free. The only thing it does is an atomic
+    /// integer load of the channel state. And if there is a message in the channel it additionally
+    /// performs one atomic integer store and copies the message from the heap to the stack for
+    /// returning it.
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        // SAFETY: The channel will not be freed while this method is still running.
+        let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
+
+        match channel.state.load(SeqCst) {
+            // The sender is alive but has not sent anything yet.
+            EMPTY => Err(TryRecvError::Empty),
+            // The sender sent the message. We take the message and mark the channel disconnected.
+            MESSAGE => {
+                channel.state.store(DISCONNECTED, SeqCst);
+                Ok(unsafe { channel.take_message() })
+            }
+            // The sender was dropped before sending anything, or we already received the message.
+            DISCONNECTED => Err(TryRecvError::Disconnected),
+            // The receiver must have already been `Future::poll`ed. No message available.
+            #[cfg(feature = "async")]
+            RECEIVING => Err(TryRecvError::Empty),
+            _ => unreachable!(),
+        }
+    }
+
     /// Attempts to wait for a message from the [`Sender`], returning an error if the channel is
     /// disconnected.
     ///
@@ -419,40 +453,6 @@ impl<T> Receiver<T> {
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
             RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
-            _ => unreachable!(),
-        }
-    }
-
-    /// Checks if there is a message in the channel without blocking. Returns:
-    ///  * `Ok(message)` if there was a message in the channel.
-    ///  * `Err(Empty)` if the [`Sender`] is alive, but has not yet sent a message.
-    ///  * `Err(Disconnected)` if the [`Sender`] was dropped before sending anything or if the
-    ///    message has already been extracted by a previous receive call.
-    ///
-    /// If a message is returned, the channel is disconnected and any subsequent receive operation
-    /// using this receiver will return an error.
-    ///
-    /// This method is completely lock-free and wait-free. The only thing it does is an atomic
-    /// integer load of the channel state. And if there is a message in the channel it additionally
-    /// performs one atomic integer store and copies the message from the heap to the stack for
-    /// returning it.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        // SAFETY: The channel will not be freed while this method is still running.
-        let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
-
-        match channel.state.load(SeqCst) {
-            // The sender is alive but has not sent anything yet.
-            EMPTY => Err(TryRecvError::Empty),
-            // The sender sent the message. We take the message and mark the channel disconnected.
-            MESSAGE => {
-                channel.state.store(DISCONNECTED, SeqCst);
-                Ok(unsafe { channel.take_message() })
-            }
-            // The sender was dropped before sending anything, or we already received the message.
-            DISCONNECTED => Err(TryRecvError::Disconnected),
-            // The receiver must have already been `Future::poll`ed. No message available.
-            #[cfg(feature = "async")]
-            RECEIVING => Err(TryRecvError::Empty),
             _ => unreachable!(),
         }
     }
