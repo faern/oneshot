@@ -33,7 +33,7 @@ script:
   - RUSTFLAGS+="--cfg loom" cargo test --no-default-features --features async
   - if [[ $(uname -s) == "Linux" ]]; then
       cargo install cargo-valgrind &&
-      cargo valgrind --test all_tests &&
+      cargo valgrind --test sync &&
       ./check_mem_leaks.sh &&
       RUSTFLAGS+="--cfg oneshot_test_delay" ./check_mem_leaks.sh;
     fi
