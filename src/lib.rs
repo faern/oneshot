@@ -629,7 +629,12 @@ impl<T> Drop for Receiver<T> {
                 unsafe { channel.drop_message() };
                 unsafe { Box::from_raw(channel) };
             }
-            // The sender was already dropped. We are responsible for freeing the channel
+            // The receiver has been polled.
+            #[cfg(feature = "async")]
+            RECEIVING => {
+                unsafe { channel.drop_waker() };
+            }
+            // The sender was already dropped. We are responsible for freeing the channel.
             DISCONNECTED => {
                 unsafe { Box::from_raw(channel) };
             }

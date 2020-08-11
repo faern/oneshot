@@ -115,3 +115,37 @@ async fn poll_future_and_then_try_recv() {
     StupidReceiverFuture(receiver).await.unwrap_err();
     t.await.unwrap();
 }
+
+#[tokio::test]
+async fn poll_receiver_once_then_drop() {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{self, Poll};
+
+    struct StupidReceiverFuture(Option<oneshot::Receiver<()>>);
+
+    impl Future for StupidReceiverFuture {
+        type Output = Result<(), oneshot::RecvError>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+            let mut receiver = match self.0.take() {
+                Some(receiver) => receiver,
+                None => return Poll::Pending,
+            };
+
+            let poll_result = Future::poll(Pin::new(&mut receiver), cx);
+            assert_eq!(poll_result, Poll::Pending);
+            mem::drop(receiver);
+
+            Poll::Pending
+        }
+    }
+
+    let (_sender, receiver) = oneshot::channel();
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        StupidReceiverFuture(Some(receiver)),
+    )
+    .await
+    .unwrap_err();
+}
