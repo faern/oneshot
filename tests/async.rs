@@ -115,3 +115,14 @@ async fn poll_future_and_then_try_recv() {
     StupidReceiverFuture(receiver).await.unwrap_err();
     t.await.unwrap();
 }
+
+#[tokio::test]
+async fn poll_receiver_then_drop_it() {
+    let (sender, receiver) = oneshot::channel::<()>();
+    // This will poll the receiver and then give up after 100 ms.
+    tokio::time::timeout(Duration::from_millis(100), receiver)
+        .await
+        .unwrap_err();
+    // Make sure the receiver has been dropped by the runtime.
+    assert!(sender.send(()).is_err());
+}
