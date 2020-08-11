@@ -1,6 +1,6 @@
 [package]
 name = "oneshot"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Linus Färnstrand <faern@faern.net>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
