@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+
+
+## [0.1.2] - 2020-08-11
 ### Fixed
 - Fix unreachable code panic that happened if the `Receiver` of an empty but open channel was
   polled and then dropped.
