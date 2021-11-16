@@ -39,7 +39,7 @@ async fn await_before_send_tokio() {
     let (sender, receiver) = oneshot::channel();
     let (message, counter) = DropCounter::new(79u128);
     let t = tokio::spawn(async move {
-        tokio::time::delay_for(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         sender.send(message)
     });
     let returned_message = receiver.await.unwrap();
@@ -70,7 +70,7 @@ async fn await_before_send_async_std() {
 async fn await_before_send_then_drop_sender_tokio() {
     let (sender, receiver) = oneshot::channel::<u128>();
     let t = tokio::spawn(async {
-        tokio::time::delay_for(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         mem::drop(sender);
     });
     assert!(receiver.await.is_err());
@@ -109,7 +109,7 @@ async fn poll_future_and_then_try_recv() {
 
     let (sender, receiver) = oneshot::channel();
     let t = tokio::spawn(async {
-        tokio::time::delay_for(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
         mem::drop(sender);
     });
     StupidReceiverFuture(receiver).await.unwrap_err();
