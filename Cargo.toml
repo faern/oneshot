@@ -13,7 +13,8 @@ blocking receive operations as well as Future based async polling.
 repository = "https://github.com/faern/oneshot"
 keywords = ["oneshot", "spsc", "async", "sync", "channel"]
 categories = ["asynchronous", "concurrency"]
-edition = "2018"
+edition = "2021"
+rust-version = "1.56.0"
 
 [features]
 default = ["std", "async"]

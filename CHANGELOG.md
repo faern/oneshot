@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+### Changed
+- Upgrade to Rust edition 2021.
 
 
 ## [0.1.3] - 2021-11-23
