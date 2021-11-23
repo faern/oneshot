@@ -15,8 +15,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+
+
+## [0.1.3] - 2021-11-23
 ### Fixed
-- Keep the *last* `Waker` in `Future::poll`, not the *first* one.
+- Keep the *last* `Waker` in `Future::poll`, not the *first* one. Stops breaking the contract
+  on how futures should work.
 
 
 ## [0.1.2] - 2020-08-11
