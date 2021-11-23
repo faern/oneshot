@@ -1,0 +1,30 @@
+name: Cargo build and test
+on: [push, workflow_dispatch]
+jobs:
+    build-linux:
+        strategy:
+            matrix:
+                rust: [stable, beta, nightly, 1.46.0]
+
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v2
+
+            - name: Install Rust
+              uses: ATiltedTree/setup-rust@v1.0.4
+              with:
+                  rust-version: ${{ matrix.rust }}
+
+            - name: Build and test
+              run: |
+                  cargo build
+                  cargo test
+                  cargo test --no-default-features
+                  cargo test --no-default-features --features std
+                  cargo test --no-default-features --features async
+                  RUSTFLAGS+="--cfg oneshot_test_delay" cargo test
+                  RUSTFLAGS+="--cfg loom" cargo test
+                  RUSTFLAGS+="--cfg loom" cargo test --no-default-features
+                  RUSTFLAGS+="--cfg loom" cargo test --no-default-features --features std
+                  RUSTFLAGS+="--cfg loom" cargo test --no-default-features --features async

@@ -232,7 +232,11 @@ fn recv_deadline_and_timeout_no_time() {
     })
 }
 
-#[cfg(feature = "std")]
+// This specific test does not work under loom since the receiving thread
+// can't make any progress when the sender does not send anything.
+// The way `park_timeout` is hack-implemented with loom right now this essentially
+// causes a spinlock that spins forever (it panics)
+#[cfg(all(feature = "std", not(loom)))]
 #[test]
 fn recv_deadline_and_timeout_time_should_elapse() {
     maybe_loom_model(|| {
