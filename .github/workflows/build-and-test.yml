@@ -1,5 +1,5 @@
 name: Cargo build and test
-on: [push, workflow_dispatch]
+on: [push, pull_request, workflow_dispatch]
 jobs:
     build-linux:
         strategy:
