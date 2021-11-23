@@ -577,9 +577,8 @@ impl<T> core::future::Future for Receiver<T> {
         let channel: &mut Channel<T> = unsafe { &mut *self.channel_ptr };
 
         match channel.state.load(SeqCst) {
+            // The sender is alive but has not sent anything yet.
             EMPTY => {
-                // The sender is alive but has not sent anything yet.
-
                 // Write our thread instance to the channel.
                 channel.write_waker(ReceiverWaker::task_waker(cx));
 
