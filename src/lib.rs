@@ -379,7 +379,7 @@ impl<T> Receiver<T> {
             }
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
-            RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
+            RECEIVING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -452,7 +452,7 @@ impl<T> Receiver<T> {
             DISCONNECTED => Err(RecvError),
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
-            RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
+            RECEIVING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -562,7 +562,7 @@ impl<T> Receiver<T> {
             DISCONNECTED => Err(RecvTimeoutError::Disconnected),
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
-            RECEIVING => panic!(RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
+            RECEIVING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
