@@ -232,7 +232,10 @@ fn recv_deadline_and_timeout_time_should_elapse() {
         let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
+        #[cfg(not(loom))]
         let timeout = Duration::from_millis(100);
+        #[cfg(loom)]
+        let timeout = Duration::from_millis(1);
         assert_eq!(
             receiver.recv_deadline(start + timeout),
             Err(RecvTimeoutError::Timeout)

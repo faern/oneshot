@@ -159,9 +159,15 @@ mod thread {
     #[cfg(loom)]
     pub use loom::thread::{current, park, Thread};
 
+    // loom does not support parking with a timeout. So we just
+    // yield. This means that the "park" will "spuriously" wake up
+    // way too early. But the code should properly handle this.
+    // One thing to note is that very short timeouts are needed
+    // when using loom, since otherwise the looping will cause
+    // an overflow in loom.
     #[cfg(loom)]
     pub fn park_timeout(_timeout: std::time::Duration) {
-        loom::thread::park()
+        loom::thread::yield_now()
     }
 }
 
