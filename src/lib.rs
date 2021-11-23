@@ -578,30 +578,28 @@ impl<T> core::future::Future for Receiver<T> {
 
         match channel.state.load(SeqCst) {
             // The sender is alive but has not sent anything yet.
-            EMPTY => {
-                // Write our thread instance to the channel.
-                channel.write_waker(ReceiverWaker::task_waker(cx));
-
-                match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
-                    // We stored our waker, now we return and let the sender wake us up
-                    EMPTY => Poll::Pending,
-                    // The sender was dropped before sending anything while we prepared to park.
-                    DISCONNECTED => {
+            EMPTY => channel.write_async_waker(cx),
+            // We were polled again while waiting for the sender. Replace the waker with the new one.
+            RECEIVING => {
+                match channel.state.compare_and_swap(RECEIVING, EMPTY, SeqCst) {
+                    // We successfully changed the state back to EMPTY. Replace the waker.
+                    RECEIVING => {
                         unsafe { channel.drop_waker() };
-                        Poll::Ready(Err(RecvError))
+                        channel.write_async_waker(cx)
                     }
-                    // The sender sent the message while we prepared to park.
+                    // The sender sent the message while we prepared to replace the waker.
                     // We take the message and mark the channel disconnected.
+                    // The sender has already taken the waker.
                     MESSAGE => {
-                        unsafe { channel.drop_waker() };
                         channel.state.store(DISCONNECTED, SeqCst);
                         Poll::Ready(Ok(unsafe { channel.take_message() }))
                     }
+                    // The sender was dropped before sending anything while we prepared to park.
+                    // The sender has taken the waker already.
+                    DISCONNECTED => Poll::Ready(Err(RecvError)),
                     _ => unreachable!(),
                 }
             }
-            // Our waker is still in the channel. We were polled while waiting for the sender.
-            RECEIVING => Poll::Pending,
             // The sender sent the message.
             MESSAGE => {
                 channel.state.store(DISCONNECTED, SeqCst);
@@ -710,6 +708,30 @@ impl<T> Channel<T> {
     #[inline(always)]
     unsafe fn drop_waker(&mut self) {
         ptr::drop_in_place(self.waker.as_mut_ptr());
+    }
+
+    #[cfg(feature = "async")]
+    fn write_async_waker(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<T, RecvError>> {
+        // Write our thread instance to the channel.
+        self.write_waker(ReceiverWaker::task_waker(cx));
+
+        match self.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
+            // We stored our waker, now we return and let the sender wake us up
+            EMPTY => Poll::Pending,
+            // The sender was dropped before sending anything while we prepared to park.
+            DISCONNECTED => {
+                unsafe { self.drop_waker() };
+                Poll::Ready(Err(RecvError))
+            }
+            // The sender sent the message while we prepared to park.
+            // We take the message and mark the channel disconnected.
+            MESSAGE => {
+                unsafe { self.drop_waker() };
+                self.state.store(DISCONNECTED, SeqCst);
+                Poll::Ready(Ok(unsafe { self.take_message() }))
+            }
+            _ => unreachable!(),
+        }
     }
 }
 

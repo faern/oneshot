@@ -12,6 +12,13 @@ use loom::sync::{
     Arc,
 };
 
+pub fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
+    #[cfg(loom)]
+    loom::model(test);
+    #[cfg(not(loom))]
+    test();
+}
+
 pub struct DropCounter<T> {
     drop_count: Arc<AtomicUsize>,
     value: Option<T>,

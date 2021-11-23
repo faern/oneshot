@@ -20,14 +20,7 @@ mod thread {
 }
 
 mod helpers;
-use helpers::DropCounter;
-
-fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
-    #[cfg(loom)]
-    loom::model(test);
-    #[cfg(not(loom))]
-    test();
-}
+use helpers::{maybe_loom_model, DropCounter};
 
 #[test]
 fn send_before_try_recv() {
