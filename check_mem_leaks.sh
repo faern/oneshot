@@ -9,5 +9,5 @@ for example_path in examples/*.rs; do
     example_filename=$(basename -- $example_path)
     example=${example_filename%.*}
     echo $example
-    cargo valgrind --example "$example"
+    cargo valgrind run --example "$example"
 done
