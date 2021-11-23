@@ -153,16 +153,15 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "std")]
 mod thread {
-    pub use std::thread::{current, Thread};
+    #[cfg(not(loom))]
+    pub use std::thread::{current, park, park_timeout, Thread};
 
     #[cfg(loom)]
-    pub use loom::thread::yield_now as park;
-    #[cfg(not(loom))]
-    pub use std::thread::{park, park_timeout};
+    pub use loom::thread::{current, park, Thread};
 
     #[cfg(loom)]
     pub fn park_timeout(_timeout: std::time::Duration) {
-        loom::thread::yield_now()
+        loom::thread::park()
     }
 }
 
@@ -765,6 +764,7 @@ impl ReceiverWaker {
     }
 }
 
+#[cfg(not(loom))]
 #[test]
 fn receiver_waker_size() {
     let expected: usize = match (cfg!(feature = "std"), cfg!(feature = "async")) {
