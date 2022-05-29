@@ -145,11 +145,13 @@ use core::{
 #[cfg(not(loom))]
 use core::{
     cell::UnsafeCell,
+    hint,
     sync::atomic::{fence, AtomicU8, Ordering::*},
 };
 #[cfg(loom)]
 use loom::{
     cell::UnsafeCell,
+    hint,
     sync::atomic::{fence, AtomicU8, Ordering::*},
 };
 
@@ -857,6 +859,11 @@ impl<T> core::future::Future for Receiver<T> {
                     // The sender was dropped before sending anything while we prepared to park.
                     // The sender has taken the waker already.
                     Err(DISCONNECTED) => Poll::Ready(Err(RecvError)),
+                    Err(UNPARKING) => {
+                        cx.waker().wake_by_ref();
+                        hint::spin_loop();
+                        Poll::Pending
+                    }
                     _ => unreachable!(),
                 }
             }

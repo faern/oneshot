@@ -212,7 +212,10 @@ fn try_recv_then_drop_receiver() {
             let _ = sender.send(42);
         });
         let t2 = thread::spawn(move || {
-            assert!(matches!(receiver.try_recv(), Ok(42) | Err(TryRecvError::Empty)));
+            assert!(matches!(
+                receiver.try_recv(),
+                Ok(42) | Err(TryRecvError::Empty)
+            ));
             mem::drop(receiver);
         });
         t1.join().unwrap();
@@ -243,12 +246,7 @@ fn recv_deadline_and_timeout_no_time() {
 }
 
 // This test doesn't give meaningful results when run with oneshot_test_delay and loom
-#[cfg(
-    all(
-        feature = "std",
-        not(all(oneshot_test_delay, loom))
-    )
-)]
+#[cfg(all(feature = "std", not(all(oneshot_test_delay, loom))))]
 #[test]
 fn recv_deadline_and_timeout_time_should_elapse() {
     maybe_loom_model(|| {
