@@ -464,19 +464,16 @@ impl<T> Receiver<T> {
                 // to access the waker until it sees the state set to RECEIVING
                 unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
 
-                // Try to switch the state from EMPTY to RECEIVING. We need to do this in one
+                // Switch the state from EMPTY to RECEIVING. We need to do this in one
                 // atomic step in case the sender disconnected or sent the message while we wrote
-                // the waker to memory.
+                // the waker to memory. We don't need to do a compare exchange here however because
+                // if the original state was not EMPTY, then the sender has either finished sending
+                // the message or is being dropped, so the RECEIVING state will never be observed
+                // after we return.
                 // ORDERING: we use release ordering so the sender can synchronize with our writing
                 // of the waker to memory. The individual branches handle any additional
                 // synchronizaton
-                //
-                // EMPTY - 3 = RECEIVING
-                // MESSAGE - 3 = UNPARKING (invalid)
-                // DISCONNECTED - 3 = invalid
-                // Since in the two invalid states the sender is no longer active, and since we're
-                // consuming `self`, they can never be observed
-                match channel.state.fetch_sub(3, Release) {
+                match channel.state.swap(RECEIVING, Release) {
                     // We stored our waker, now we park until the sender has changed the state
                     EMPTY => loop {
                         thread::park();
