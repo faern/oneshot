@@ -205,6 +205,23 @@ fn try_recv() {
 
 #[cfg(feature = "std")]
 #[test]
+fn try_recv_then_drop_receiver() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<u128>();
+        let t1 = thread::spawn(move || {
+            let _ = sender.send(42);
+        });
+        let t2 = thread::spawn(move || {
+            assert!(matches!(receiver.try_recv(), Ok(42) | Err(TryRecvError::Empty)));
+            mem::drop(receiver);
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+    })
+}
+
+#[cfg(feature = "std")]
+#[test]
 fn recv_deadline_and_timeout_no_time() {
     maybe_loom_model(|| {
         let (_sender, receiver) = oneshot::channel::<u128>();
@@ -225,7 +242,13 @@ fn recv_deadline_and_timeout_no_time() {
     })
 }
 
-#[cfg(feature = "std")]
+// This test doesn't give meaningful results when run with oneshot_test_delay and loom
+#[cfg(
+    all(
+        feature = "std",
+        not(all(oneshot_test_delay, loom))
+    )
+)]
 #[test]
 fn recv_deadline_and_timeout_time_should_elapse() {
     maybe_loom_model(|| {
