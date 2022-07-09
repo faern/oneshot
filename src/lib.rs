@@ -334,9 +334,12 @@ impl<T> Receiver<T> {
                 // Write our waker instance to the channel.
                 channel.write_waker(ReceiverWaker::current_thread());
 
-                match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
+                match channel
+                    .state
+                    .compare_exchange(EMPTY, RECEIVING, SeqCst, SeqCst)
+                {
                     // We stored our waker, now we park until the sender has changed the state
-                    EMPTY => loop {
+                    Ok(EMPTY) => loop {
                         thread::park();
                         match channel.state.load(SeqCst) {
                             // The sender sent the message while we were parked.
@@ -356,14 +359,14 @@ impl<T> Receiver<T> {
                         }
                     },
                     // The sender sent the message while we prepared to park.
-                    MESSAGE => {
+                    Err(MESSAGE) => {
                         unsafe { channel.drop_waker() };
                         let message = unsafe { channel.take_message() };
                         unsafe { Box::from_raw(channel) };
                         Ok(message)
                     }
                     // The sender was dropped before sending anything while we prepared to park.
-                    DISCONNECTED => {
+                    Err(DISCONNECTED) => {
                         unsafe { channel.drop_waker() };
                         unsafe { Box::from_raw(channel) };
                         Err(RecvError)
@@ -416,9 +419,12 @@ impl<T> Receiver<T> {
                 // Write our waker instance to the channel.
                 channel.write_waker(ReceiverWaker::current_thread());
 
-                match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
+                match channel
+                    .state
+                    .compare_exchange(EMPTY, RECEIVING, SeqCst, SeqCst)
+                {
                     // We stored our waker, now we park until the sender has changed the state
-                    EMPTY => loop {
+                    Ok(EMPTY) => loop {
                         thread::park();
                         match channel.state.load(SeqCst) {
                             // The sender sent the message while we were parked.
@@ -435,13 +441,13 @@ impl<T> Receiver<T> {
                         }
                     },
                     // The sender sent the message while we prepared to park.
-                    MESSAGE => {
+                    Err(MESSAGE) => {
                         channel.state.store(DISCONNECTED, SeqCst);
                         unsafe { channel.drop_waker() };
                         Ok(unsafe { channel.take_message() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
-                    DISCONNECTED => {
+                    Err(DISCONNECTED) => {
                         unsafe { channel.drop_waker() };
                         Err(RecvError)
                     }
@@ -514,9 +520,12 @@ impl<T> Receiver<T> {
                 // Write our thread instance to the channel.
                 channel.write_waker(ReceiverWaker::current_thread());
 
-                match channel.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
+                match channel
+                    .state
+                    .compare_exchange(EMPTY, RECEIVING, SeqCst, SeqCst)
+                {
                     // We stored our waker, now we park until the sender has changed the state
-                    EMPTY => loop {
+                    Ok(EMPTY) => loop {
                         let (state, timed_out) = if let Some(timeout) =
                             deadline.checked_duration_since(Instant::now())
                         {
@@ -545,13 +554,13 @@ impl<T> Receiver<T> {
                         }
                     },
                     // The sender sent the message while we prepared to park.
-                    MESSAGE => {
+                    Err(MESSAGE) => {
                         channel.state.store(DISCONNECTED, SeqCst);
                         unsafe { channel.drop_waker() };
                         Ok(unsafe { channel.take_message() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
-                    DISCONNECTED => {
+                    Err(DISCONNECTED) => {
                         unsafe { channel.drop_waker() };
                         Err(RecvTimeoutError::Disconnected)
                     }
@@ -586,22 +595,25 @@ impl<T> core::future::Future for Receiver<T> {
             EMPTY => channel.write_async_waker(cx),
             // We were polled again while waiting for the sender. Replace the waker with the new one.
             RECEIVING => {
-                match channel.state.compare_and_swap(RECEIVING, EMPTY, SeqCst) {
+                match channel
+                    .state
+                    .compare_exchange(RECEIVING, EMPTY, SeqCst, SeqCst)
+                {
                     // We successfully changed the state back to EMPTY. Replace the waker.
-                    RECEIVING => {
+                    Ok(RECEIVING) => {
                         unsafe { channel.drop_waker() };
                         channel.write_async_waker(cx)
                     }
                     // The sender sent the message while we prepared to replace the waker.
                     // We take the message and mark the channel disconnected.
                     // The sender has already taken the waker.
-                    MESSAGE => {
+                    Err(MESSAGE) => {
                         channel.state.store(DISCONNECTED, SeqCst);
                         Poll::Ready(Ok(unsafe { channel.take_message() }))
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     // The sender has taken the waker already.
-                    DISCONNECTED => Poll::Ready(Err(RecvError)),
+                    Err(DISCONNECTED) => Poll::Ready(Err(RecvError)),
                     _ => unreachable!(),
                 }
             }
@@ -720,17 +732,20 @@ impl<T> Channel<T> {
         // Write our thread instance to the channel.
         self.write_waker(ReceiverWaker::task_waker(cx));
 
-        match self.state.compare_and_swap(EMPTY, RECEIVING, SeqCst) {
+        match self
+            .state
+            .compare_exchange(EMPTY, RECEIVING, SeqCst, SeqCst)
+        {
             // We stored our waker, now we return and let the sender wake us up
-            EMPTY => Poll::Pending,
+            Ok(EMPTY) => Poll::Pending,
             // The sender was dropped before sending anything while we prepared to park.
-            DISCONNECTED => {
+            Err(DISCONNECTED) => {
                 unsafe { self.drop_waker() };
                 Poll::Ready(Err(RecvError))
             }
             // The sender sent the message while we prepared to park.
             // We take the message and mark the channel disconnected.
-            MESSAGE => {
+            Err(MESSAGE) => {
                 unsafe { self.drop_waker() };
                 self.state.store(DISCONNECTED, SeqCst);
                 Poll::Ready(Ok(unsafe { self.take_message() }))
