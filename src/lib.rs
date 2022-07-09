@@ -278,7 +278,7 @@ impl<T> Drop for Sender<T> {
             RECEIVING => unsafe { channel.take_waker() }.unpark(),
             // The receiver was already dropped. We are responsible for freeing the channel.
             DISCONNECTED => {
-                unsafe { Box::from_raw(self.channel.as_ptr()) };
+                unsafe { dealloc(self.channel) };
             }
             _ => unreachable!(),
         }
@@ -369,12 +369,12 @@ impl<T> Receiver<T> {
                             // The sender sent the message while we were parked.
                             MESSAGE => {
                                 let message = unsafe { channel.take_message() };
-                                unsafe { Box::from_raw(channel_ptr.as_ptr()) };
+                                unsafe { dealloc(channel_ptr) };
                                 break Ok(message);
                             }
                             // The sender was dropped while we were parked.
                             DISCONNECTED => {
-                                unsafe { Box::from_raw(channel_ptr.as_ptr()) };
+                                unsafe { dealloc(channel_ptr) };
                                 break Err(RecvError);
                             }
                             // State did not change, spurious wakeup, park again.
@@ -386,13 +386,13 @@ impl<T> Receiver<T> {
                     Err(MESSAGE) => {
                         unsafe { channel.drop_waker() };
                         let message = unsafe { channel.take_message() };
-                        unsafe { Box::from_raw(channel_ptr.as_ptr()) };
+                        unsafe { dealloc(channel_ptr) };
                         Ok(message)
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     Err(DISCONNECTED) => {
                         unsafe { channel.drop_waker() };
-                        unsafe { Box::from_raw(channel_ptr.as_ptr()) };
+                        unsafe { dealloc(channel_ptr) };
                         Err(RecvError)
                     }
                     _ => unreachable!(),
@@ -401,12 +401,12 @@ impl<T> Receiver<T> {
             // The sender already sent the message.
             MESSAGE => {
                 let message = unsafe { channel.take_message() };
-                unsafe { Box::from_raw(channel_ptr.as_ptr()) };
+                unsafe { dealloc(channel_ptr) };
                 Ok(message)
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => {
-                unsafe { Box::from_raw(channel_ptr.as_ptr()) };
+                unsafe { dealloc(channel_ptr) };
                 Err(RecvError)
             }
             // The receiver must have been `Future::poll`ed prior to this call.
@@ -672,7 +672,7 @@ impl<T> Drop for Receiver<T> {
             // The sender already sent something. We must drop it, and free the channel.
             MESSAGE => {
                 unsafe { channel.drop_message() };
-                unsafe { Box::from_raw(self.channel.as_ptr()) };
+                unsafe { dealloc(self.channel) };
             }
             // The receiver has been polled.
             #[cfg(feature = "async")]
@@ -681,7 +681,7 @@ impl<T> Drop for Receiver<T> {
             }
             // The sender was already dropped. We are responsible for freeing the channel.
             DISCONNECTED => {
-                unsafe { Box::from_raw(self.channel.as_ptr()) };
+                unsafe { dealloc(self.channel) };
             }
             _ => unreachable!(),
         }
@@ -886,3 +886,8 @@ fn receiver_waker_size() {
 #[cfg(all(feature = "std", feature = "async"))]
 const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
     "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
+
+#[inline]
+pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {
+    drop(Box::from_raw(channel.as_ptr()))
+}
