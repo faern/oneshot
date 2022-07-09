@@ -1,50 +1,61 @@
-use super::Box;
+use super::{Box, Channel};
 use core::fmt;
 use core::mem;
+use core::ptr::NonNull;
 
 /// An error returned when trying to send on a closed channel. Returned from
 /// [`Sender::send`] if the corresponding [`Receiver`] has already been dropped.
 ///
 /// The message that could not be sent can be retreived again with [`SendError::into_inner`].
 pub struct SendError<T> {
-    channel_ptr: *mut super::Channel<T>,
+    channel_ptr: NonNull<Channel<T>>,
 }
 
 unsafe impl<T: Send> Send for SendError<T> {}
+unsafe impl<T: Sync> Sync for SendError<T> {}
 
 impl<T> SendError<T> {
-    pub(crate) const fn new(channel_ptr: *mut super::Channel<T>) -> Self {
+    /// Safety: by calling this function, the caller semantically transfers ownership of the
+    /// channel's resources to the created `SendError`. Thus the caller must ensure that the
+    /// pointer is not used in a way which would violate this ownership transfer. Moreover,
+    /// the caller must assert that the channel contains a valid, initialized message.
+    pub(crate) const unsafe fn new(channel_ptr: NonNull<Channel<T>>) -> Self {
         Self { channel_ptr }
     }
 
     /// Consumes the error and returns the message that failed to be sent.
     #[inline]
     pub fn into_inner(self) -> T {
-        // SAFETY: The reference won't be used after it is freed in this method
-        let channel: &mut super::Channel<T> = unsafe { &mut *self.channel_ptr };
+        let channel_ptr = self.channel_ptr;
 
         // Don't run destructor if we consumed ourselves. Freeing happens here.
         mem::forget(self);
 
+        // SAFETY: we have ownership of the channel
+        let channel: &Channel<T> = unsafe { channel_ptr.as_ref() };
+
+        // SAFETY: we know that the message is initialized according to the safety requirements of
+        // `new`
         let message = unsafe { channel.take_message() };
-        unsafe { Box::from_raw(channel) };
+        unsafe { Box::from_raw(channel_ptr.as_ptr()) };
         message
     }
 
     /// Get a reference to the message that failed to be sent.
     #[inline]
     pub fn as_inner(&self) -> &T {
-        unsafe { &*(*self.channel_ptr).message.as_ptr() }
+        unsafe { self.channel_ptr.as_ref().message().assume_init_ref() }
     }
 }
 
 impl<T> Drop for SendError<T> {
     fn drop(&mut self) {
-        // SAFETY: The reference won't be used after it is freed in this method
-        let channel: &mut super::Channel<T> = unsafe { &mut *self.channel_ptr };
-
-        unsafe { channel.drop_message() };
-        unsafe { Box::from_raw(channel) };
+        // SAFETY: we have ownership of the channel and require that the message is initialized
+        // upon construction
+        unsafe {
+            self.channel_ptr.as_ref().drop_message();
+            Box::from_raw(self.channel_ptr.as_ptr());
+        }
     }
 }
 
