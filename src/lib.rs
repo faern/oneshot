@@ -235,6 +235,8 @@ pub struct Sender<T> {
 
 #[derive(Debug)]
 pub struct Receiver<T> {
+    // Covariance is the right choice here. Consider the example presented in Sender, and you'll
+    // see that if we replaced `rx` instead then we would get the expected behavior
     channel_ptr: NonNull<Channel<T>>,
 }
 
@@ -264,9 +266,8 @@ impl<T> Sender<T> {
         let channel = unsafe { channel_ptr.as_ref() };
 
         // Write the message into the channel on the heap.
-        unsafe {
-            channel.write_message(message);
-        }
+        unsafe { channel.write_message(message) };
+
         // Set the state to signal there is a message on the channel.
         match channel.state.swap(MESSAGE, SeqCst) {
             // The receiver is alive and has not started waiting. Send done.
@@ -374,9 +375,7 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                unsafe {
-                    channel.write_waker(ReceiverWaker::current_thread());
-                }
+                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
 
                 match channel
                     .state
@@ -465,9 +464,7 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                unsafe {
-                    channel.write_waker(ReceiverWaker::current_thread());
-                }
+                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
 
                 match channel
                     .state
@@ -572,9 +569,7 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our thread instance to the channel.
-                unsafe {
-                    channel.write_waker(ReceiverWaker::current_thread());
-                }
+                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
 
                 match channel
                     .state

@@ -37,7 +37,10 @@ impl<T> SendError<T> {
         // SAFETY: we know that the message is initialized according to the safety requirements of
         // `new`
         let message = unsafe { channel.take_message() };
+
+        // SAFETY: we own the channel
         unsafe { dealloc(channel_ptr) };
+
         message
     }
 
