@@ -136,12 +136,22 @@
 #[cfg(not(loom))]
 extern crate alloc;
 
-use core::{mem::{self, MaybeUninit}, ptr::{self, NonNull}, marker::PhantomData};
+use core::{
+    marker::PhantomData,
+    mem::{self, MaybeUninit},
+    ptr::{self, NonNull},
+};
 
 #[cfg(not(loom))]
-use core::{cell::UnsafeCell, sync::atomic::{AtomicU8, Ordering::SeqCst}};
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicU8, Ordering::SeqCst},
+};
 #[cfg(loom)]
-use loom::{cell::UnsafeCell, sync::atomic::{AtomicU8, Ordering::SeqCst}};
+use loom::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicU8, Ordering::SeqCst},
+};
 
 #[cfg(feature = "async")]
 use core::{
@@ -192,7 +202,13 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     // SAFETY: `channel_ptr` came from a Box and thus is not null
     let channel_ptr = unsafe { NonNull::new_unchecked(channel_ptr) };
 
-    (Sender { channel_ptr, _invariant: PhantomData }, Receiver { channel_ptr })
+    (
+        Sender {
+            channel_ptr,
+            _invariant: PhantomData,
+        },
+        Receiver { channel_ptr },
+    )
 }
 
 #[derive(Debug)]
@@ -204,14 +220,14 @@ pub struct Sender<T> {
     // ```
     // let (mut tx, rx) = channel::<&'short u8>();
     // let (tx2, rx2) = channel::<&'long u8>();
-    // 
+    //
     // tx = tx2;
-    // 
+    //
     // // Pretend short_ref is some &'short u8
     // tx.send(short_ref).unwrap();
     // let long_ref = rx2.recv().unwrap();
     // ```
-    // 
+    //
     // If this type were covariant then we could safely extend lifetimes, which is not okay.
     // Hence, we enforce invariance.
     _invariant: PhantomData<fn(T) -> T>,
@@ -248,7 +264,9 @@ impl<T> Sender<T> {
         let channel = unsafe { channel_ptr.as_ref() };
 
         // Write the message into the channel on the heap.
-        unsafe { channel.write_message(message); }
+        unsafe {
+            channel.write_message(message);
+        }
         // Set the state to signal there is a message on the channel.
         match channel.state.swap(MESSAGE, SeqCst) {
             // The receiver is alive and has not started waiting. Send done.
@@ -356,7 +374,9 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                unsafe { channel.write_waker(ReceiverWaker::current_thread()); }
+                unsafe {
+                    channel.write_waker(ReceiverWaker::current_thread());
+                }
 
                 match channel
                     .state
@@ -445,7 +465,9 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                unsafe { channel.write_waker(ReceiverWaker::current_thread()); }
+                unsafe {
+                    channel.write_waker(ReceiverWaker::current_thread());
+                }
 
                 match channel
                     .state
@@ -550,7 +572,9 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our thread instance to the channel.
-                unsafe { channel.write_waker(ReceiverWaker::current_thread()); }
+                unsafe {
+                    channel.write_waker(ReceiverWaker::current_thread());
+                }
 
                 match channel
                     .state
