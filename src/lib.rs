@@ -448,10 +448,6 @@ impl<T> Receiver<T> {
     #[cfg(feature = "std")]
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         let channel_ptr = self.channel_ptr;
-
-        // Don't run our Drop implementation if we are receiving consuming ourselves.
-        mem::forget(self);
-
         let channel = unsafe { channel_ptr.as_ref() };
 
         match channel.state.load(SeqCst) {
@@ -553,10 +549,6 @@ impl<T> Receiver<T> {
     #[cfg(feature = "std")]
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         let channel_ptr = self.channel_ptr;
-
-        // Don't run our Drop implementation if we are receiving consuming ourselves.
-        mem::forget(self);
-
         let channel = unsafe { channel_ptr.as_ref() };
 
         match channel.state.load(SeqCst) {
