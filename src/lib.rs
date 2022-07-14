@@ -740,34 +740,40 @@ impl<T> Channel<T> {
     }
 
     #[inline(always)]
-    unsafe fn message_mut(&self) -> &mut MaybeUninit<T> {
+    unsafe fn with_message_mut<F>(&self, op: F)
+    where
+        F: FnOnce(&mut MaybeUninit<T>),
+    {
         #[cfg(loom)]
         {
-            self.message.with_mut(|ptr| &mut *ptr)
+            self.message.with_mut(|ptr| op(&mut *ptr))
         }
 
         #[cfg(not(loom))]
         {
-            &mut *self.message.get()
+            op(&mut *self.message.get())
         }
     }
 
     #[inline(always)]
-    unsafe fn waker_mut(&self) -> &mut MaybeUninit<ReceiverWaker> {
+    unsafe fn with_waker_mut<F>(&self, op: F)
+    where
+        F: FnOnce(&mut MaybeUninit<ReceiverWaker>),
+    {
         #[cfg(loom)]
         {
-            self.waker.with_mut(|ptr| &mut *ptr)
+            self.waker.with_mut(|ptr| op(&mut *ptr))
         }
 
         #[cfg(not(loom))]
         {
-            &mut *self.waker.get()
+            op(&mut *self.waker.get())
         }
     }
 
     #[inline(always)]
     unsafe fn write_message(&self, message: T) {
-        self.message_mut().as_mut_ptr().write(message);
+        self.with_message_mut(|slot| slot.as_mut_ptr().write(message));
     }
 
     #[inline(always)]
@@ -785,13 +791,13 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn drop_message(&self) {
-        self.message_mut().assume_init_drop();
+        self.with_message_mut(|slot| ptr::drop_in_place(slot.as_mut_ptr()));
     }
 
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn write_waker(&self, waker: ReceiverWaker) {
-        self.waker_mut().as_mut_ptr().write(waker);
+        self.with_waker_mut(|slot| slot.as_mut_ptr().write(waker));
     }
 
     #[inline(always)]
@@ -810,7 +816,7 @@ impl<T> Channel<T> {
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn drop_waker(&self) {
-        self.waker_mut().assume_init_drop();
+        self.with_waker_mut(|slot| ptr::drop_in_place(slot.as_mut_ptr()));
     }
 
     #[cfg(feature = "async")]
