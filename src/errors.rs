@@ -1,5 +1,6 @@
 use super::{dealloc, Channel};
 use core::fmt;
+use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
 
@@ -9,6 +10,7 @@ use core::ptr::NonNull;
 /// The message that could not be sent can be retreived again with [`SendError::into_inner`].
 pub struct SendError<T> {
     channel_ptr: NonNull<Channel<T>>,
+    _dropck: PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for SendError<T> {}
@@ -20,7 +22,10 @@ impl<T> SendError<T> {
     /// pointer is not used in a way which would violate this ownership transfer. Moreover,
     /// the caller must assert that the channel contains a valid, initialized message.
     pub(crate) const unsafe fn new(channel_ptr: NonNull<Channel<T>>) -> Self {
-        Self { channel_ptr }
+        Self {
+            channel_ptr,
+            _dropck: PhantomData,
+        }
     }
 
     /// Consumes the error and returns the message that failed to be sent.

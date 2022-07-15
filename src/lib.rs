@@ -767,6 +767,7 @@ impl<T> Channel<T> {
     }
 
     #[inline(always)]
+    #[cfg(any(feature = "std", feature = "async"))]
     unsafe fn with_waker_mut<F>(&self, op: F)
     where
         F: FnOnce(&mut MaybeUninit<ReceiverWaker>),
