@@ -16,7 +16,17 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 ### Changed
-- Upgrade to Rust edition 2021.
+- Upgrade to Rust edition 2021. Also increases the MSRV to Rust 1.60.
+- Add null-pointer optimization to `Sender`, `Receiver` and `SendError`.
+  This reduces the call stack size of Sender::send and it makes
+  `Option<Sender>` and `Option<Receiver>` pointer sized.
+
+### Fixed
+- Fix undefined behavior due to multiple mutable references to the same channel instance
+- Fix unsafe ownership code, telling dropck that the Sender/Receiver/SendError owns the
+  (potentially) contained message, and might drop it. This prevents some unsound code
+  from compiling. Even if users of this crate are very unlikely to have ever written
+  such code, this is strictly breaking, as it stops some (invalid) code from compiling.
 
 
 ## [0.1.3] - 2021-11-23
