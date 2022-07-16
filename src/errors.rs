@@ -10,9 +10,40 @@ use core::ptr::NonNull;
 /// The message that could not be sent can be retreived again with [`SendError::into_inner`].
 pub struct SendError<T> {
     channel_ptr: NonNull<Channel<T>>,
-    // Required due to the reasons outlined in the nomicon section linked below, as well as in the
-    // next section.
-    // https://doc.rust-lang.org/nomicon/dropck.html
+    /// Required due to the reasons outlined in
+    /// [this section](https://doc.rust-lang.org/nomicon/dropck.html) of the nomicon, as well as
+    /// the next section.
+    ///
+    /// Without the phantom data, the following code would incorrectly compile. This code is
+    /// invalid because `error` gets dropped first (struct fields are dropped in declaration order)
+    /// but `oof` then accesses the data deallocated by `error`, causing a use-after-free.
+    ///
+    /// ```compile_fail
+    /// let (tx, rx) = oneshot::channel::<Box<u8>>();
+    /// drop(rx);
+    /// let error = tx.send(Box::new(0)).unwrap_err();
+    ///
+    /// struct Oof<'a>(&'a u8);
+    ///
+    /// impl<'a> Drop for Oof<'a> {
+    ///     fn drop(&mut self) {
+    ///         println!("{}", self.0);
+    ///     }
+    /// }
+    ///
+    /// struct Foo<'a> {
+    ///     error: SendError<Box<u8>>,
+    ///     oof: Option<Oof<'a>>,
+    /// }
+    ///
+    /// let mut foo = Foo {
+    ///     error,
+    ///     oof: None
+    /// };
+    ///
+    /// foo.oof = Some(Oof(&**foo.error.as_inner()));
+    /// drop(foo);
+    /// ```
     _dropck: PhantomData<T>,
 }
 
@@ -20,7 +51,9 @@ unsafe impl<T: Send> Send for SendError<T> {}
 unsafe impl<T: Sync> Sync for SendError<T> {}
 
 impl<T> SendError<T> {
-    /// Safety: by calling this function, the caller semantically transfers ownership of the
+    /// # Safety
+    ///
+    /// By calling this function, the caller semantically transfers ownership of the
     /// channel's resources to the created `SendError`. Thus the caller must ensure that the
     /// pointer is not used in a way which would violate this ownership transfer. Moreover,
     /// the caller must assert that the channel contains a valid, initialized message.

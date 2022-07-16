@@ -206,8 +206,12 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         Sender {
             channel_ptr,
             _invariant: PhantomData,
+            _dropck: PhantomData,
         },
-        Receiver { channel_ptr },
+        Receiver {
+            channel_ptr,
+            _dropck: PhantomData,
+        },
     )
 }
 
@@ -231,6 +235,8 @@ pub struct Sender<T> {
     // If this type were covariant then we could safely extend lifetimes, which is not okay.
     // Hence, we enforce invariance.
     _invariant: PhantomData<fn(T) -> T>,
+    // See SendError for details
+    _dropck: PhantomData<T>,
 }
 
 #[derive(Debug)]
@@ -238,6 +244,8 @@ pub struct Receiver<T> {
     // Covariance is the right choice here. Consider the example presented in Sender, and you'll
     // see that if we replaced `rx` instead then we would get the expected behavior
     channel_ptr: NonNull<Channel<T>>,
+    // See SendError for details
+    _dropck: PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for Sender<T> {}
@@ -803,7 +811,7 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn drop_message(&self) {
-        self.with_message_mut(|slot| ptr::drop_in_place(slot.as_mut_ptr()));
+        self.with_message_mut(|slot| slot.assume_init_drop());
     }
 
     #[cfg(any(feature = "std", feature = "async"))]
@@ -828,7 +836,7 @@ impl<T> Channel<T> {
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn drop_waker(&self) {
-        self.with_waker_mut(|slot| ptr::drop_in_place(slot.as_mut_ptr()));
+        self.with_waker_mut(|slot| slot.assume_init_drop());
     }
 
     #[cfg(feature = "async")]
