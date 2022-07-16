@@ -10,6 +10,9 @@ use core::ptr::NonNull;
 /// The message that could not be sent can be retreived again with [`SendError::into_inner`].
 pub struct SendError<T> {
     channel_ptr: NonNull<Channel<T>>,
+    // Required due to the reasons outlined in the nomicon section linked below, as well as in the
+    // next section.
+    // https://doc.rust-lang.org/nomicon/dropck.html
     _dropck: PhantomData<T>,
 }
 
