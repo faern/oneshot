@@ -145,15 +145,18 @@ use core::{
 #[cfg(not(loom))]
 use core::{
     cell::UnsafeCell,
-    hint,
     sync::atomic::{fence, AtomicU8, Ordering::*},
 };
 #[cfg(loom)]
 use loom::{
     cell::UnsafeCell,
-    hint,
     sync::atomic::{fence, AtomicU8, Ordering::*},
 };
+
+#[cfg(all(feature = "async", not(loom)))]
+use core::hint;
+#[cfg(all(feature = "async", loom))]
+use loom::hint;
 
 #[cfg(feature = "async")]
 use core::{
@@ -288,6 +291,7 @@ impl<T> Sender<T> {
             // The receiver is alive and has not started waiting. Send done.
             EMPTY => Ok(()),
             // The receiver is waiting. Wake it up so it can return the message.
+            #[allow(unreachable_code)]
             RECEIVING => {
                 // ORDERING: Synchronizes with the write of the waker to memory, and prevents the
                 // taking of the waker from being ordered before this operation.
@@ -300,6 +304,7 @@ impl<T> Sender<T> {
                 // SAFETY: at this point we are in the UNPARKING state, and the receiving thread
                 // does not access the waker while in this state, nor does it free the channel
                 // allocation in this state.
+                #[allow(unused_variables)]
                 let waker = unsafe { channel.take_waker() };
 
                 // ORDERING: this ordering serves two-fold: it synchronizes with the acquire load
@@ -351,11 +356,13 @@ impl<T> Drop for Sender<T> {
             // The receiver has not started waiting, nor is it dropped.
             EMPTY => (),
             // The receiver is waiting. Wake it up so it can detect that the channel disconnected.
+            #[allow(unreachable_code)]
             RECEIVING => {
                 // See comments in Sender::send
 
                 fence(Acquire);
 
+                #[allow(unused_variables)]
                 let waker = unsafe { channel.take_waker() };
 
                 // We still need release ordering here to make sure our read of the waker happens
@@ -925,6 +932,7 @@ mod states {
     pub const MESSAGE: u8 = 0b100;
     /// No message has yet been sent on the channel, but the receiver is currently receiving.
     pub const RECEIVING: u8 = 0b000;
+    #[cfg(any(feature = "std", feature = "async"))]
     pub const UNPARKING: u8 = 0b001;
     /// The channel has been closed. This means that either the sender or receiver has been dropped,
     /// or the message sent to the channel has already been received. Since this is a oneshot
