@@ -1099,6 +1099,9 @@ enum ReceiverWaker {
     /// The receiver is waiting asynchronously. Its task can be woken up with this `Waker`.
     #[cfg(feature = "async")]
     Task(task::Waker),
+    /// A little hack to not make this enum an uninhibitable type when no features are enabled.
+    #[cfg(not(any(feature = "async", feature = "std")))]
+    _Uninhabited,
 }
 
 impl ReceiverWaker {
@@ -1118,6 +1121,8 @@ impl ReceiverWaker {
             ReceiverWaker::Thread(thread) => thread.unpark(),
             #[cfg(feature = "async")]
             ReceiverWaker::Task(waker) => waker.wake(),
+            #[cfg(not(any(feature = "async", feature = "std")))]
+            ReceiverWaker::_Uninhabited => unreachable!(),
         }
     }
 }
