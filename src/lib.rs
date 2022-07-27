@@ -247,6 +247,7 @@ pub struct Receiver<T> {
 
 unsafe impl<T: Send> Send for Sender<T> {}
 unsafe impl<T: Send> Send for Receiver<T> {}
+impl<T> Unpin for Receiver<T> {}
 
 impl<T> Sender<T> {
     /// Sends `message` over the channel to the corresponding [`Receiver`].
@@ -308,11 +309,13 @@ impl<T> Sender<T> {
                 let waker = unsafe { channel.take_waker() };
 
                 // ORDERING: this ordering serves two-fold: it synchronizes with the acquire load
-                // the state in the receiving thread, ensuring that both our read of the waker and
-                // write of the message happen-before the taking of the message and freeing of the
-                // channel.
+                // in the receiving thread, ensuring that both our read of the waker and write of
+                // the message happen-before the taking of the message and freeing of the channel.
                 channel.state.store(MESSAGE, Release);
 
+                // `unpark` has an implicit release ordering, so the store of the MESSAGE state
+                // happens-before we unpark the receiver
+                //
                 // Note: it is possible that between the store above and this statement that
                 // the receiving thread is spuriously unparked, takes the message, and frees
                 // the channel allocation. However, we took ownership of the channel out of
@@ -325,9 +328,9 @@ impl<T> Sender<T> {
             }
             // The receiver was already dropped. The error is responsible for freeing the channel.
             // SAFETY: since the receiver disconnected it will no longer access `channel_ptr`, so
-            // we can transfer exclusive ownership of the channel's resources to it. Moreover,
-            // since we just placed the message in the channel, the channel contains a valid
-            // message.
+            // we can transfer exclusive ownership of the channel's resources to the error.
+            // Moreover, since we just placed the message in the channel, the channel contains a
+            // valid message.
             DISCONNECTED => Err(unsafe { SendError::new(channel_ptr) }),
             _ => unreachable!(),
         }
@@ -369,6 +372,8 @@ impl<T> Drop for Sender<T> {
                 // before this.
                 channel.state.store(DISCONNECTED, Release);
 
+                // `unpark` has an implicit release ordering, so the store of the DISCONNECTED
+                // state happens-before we unpark the receiver
                 waker.unpark();
             }
             // The receiver was already dropped. We are responsible for freeing the channel.
@@ -1059,12 +1064,14 @@ impl<T> Channel<T> {
 
     #[cfg(feature = "async")]
     unsafe fn write_async_waker(&self, cx: &mut task::Context<'_>) -> Poll<Result<T, RecvError>> {
+        // FIXME: relax orderings and fix racy access to the waker if necessary
+
         // Write our thread instance to the channel.
         self.write_waker(ReceiverWaker::task_waker(cx));
 
         match self
             .state
-            .compare_exchange(EMPTY, RECEIVING, AcqRel, Acquire)
+            .compare_exchange(EMPTY, RECEIVING, SeqCst, SeqCst)
         {
             // We stored our waker, now we return and let the sender wake us up
             Ok(EMPTY) => Poll::Pending,
@@ -1077,7 +1084,7 @@ impl<T> Channel<T> {
             // We take the message and mark the channel disconnected.
             Err(MESSAGE) => {
                 self.drop_waker();
-                self.state.store(DISCONNECTED, Relaxed);
+                self.state.store(DISCONNECTED, SeqCst);
                 Poll::Ready(Ok(self.take_message()))
             }
             _ => unreachable!(),
