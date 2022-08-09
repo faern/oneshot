@@ -309,11 +309,10 @@ impl<T> Sender<T> {
                 // ORDERING: this ordering serves two-fold: it synchronizes with the acquire load
                 // in the receiving thread, ensuring that both our read of the waker and write of
                 // the message happen-before the taking of the message and freeing of the channel.
-                channel.state.store(MESSAGE, Release);
+                // Furthermore, we need acquire ordering to ensure the unparking of the receiver
+                // happens after the channel state is updated.
+                channel.state.swap(MESSAGE, AcqRel);
 
-                // `unpark` has an implicit release ordering, so the store of the MESSAGE state
-                // happens-before we unpark the receiver
-                //
                 // Note: it is possible that between the store above and this statement that
                 // the receiving thread is spuriously unparked, takes the message, and frees
                 // the channel allocation. However, we took ownership of the channel out of
@@ -365,8 +364,9 @@ impl<T> Drop for Sender<T> {
                 let waker = unsafe { channel.take_waker() };
 
                 // We still need release ordering here to make sure our read of the waker happens
-                // before this.
-                channel.state.store(DISCONNECTED, Release);
+                // before this, and acquire ordering to ensure the unparking of the receiver
+                // happens after this.
+                channel.state.swap(DISCONNECTED, AcqRel);
 
                 // `unpark` has an implicit release ordering, so the store of the DISCONNECTED
                 // state happens-before we unpark the receiver
