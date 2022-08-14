@@ -206,12 +206,8 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         Sender {
             channel_ptr,
             _invariant: PhantomData,
-            _dropck: PhantomData,
         },
-        Receiver {
-            channel_ptr,
-            _dropck: PhantomData,
-        },
+        Receiver { channel_ptr },
     )
 }
 
@@ -235,8 +231,6 @@ pub struct Sender<T> {
     // If this type were covariant then we could safely extend lifetimes, which is not okay.
     // Hence, we enforce invariance.
     _invariant: PhantomData<fn(T) -> T>,
-    // See SendError for details
-    _dropck: PhantomData<T>,
 }
 
 #[derive(Debug)]
@@ -244,8 +238,6 @@ pub struct Receiver<T> {
     // Covariance is the right choice here. Consider the example presented in Sender, and you'll
     // see that if we replaced `rx` instead then we would get the expected behavior
     channel_ptr: NonNull<Channel<T>>,
-    // See SendError for details
-    _dropck: PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for Sender<T> {}
