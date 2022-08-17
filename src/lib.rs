@@ -368,8 +368,8 @@ impl<T> Drop for Sender<T> {
                 // happens after this.
                 channel.state.swap(DISCONNECTED, AcqRel);
 
-                // `unpark` has an implicit release ordering, so the store of the DISCONNECTED
-                // state happens-before we unpark the receiver
+                // The Acquire ordering above ensures that the write of the DISCONNECTED state
+                // happens-before unparking the receiver.
                 waker.unpark();
             }
             // The receiver was already dropped. We are responsible for freeing the channel.
@@ -443,7 +443,7 @@ impl<T> Receiver<T> {
     #[cfg(feature = "std")]
     pub fn recv(self) -> Result<T, RecvError> {
         // Note that we don't need to worry about changing the state to disconnected or setting the
-        // state to an invalid value at any point in this functon because we take ownership of
+        // state to an invalid value at any point in this function because we take ownership of
         // self, and this function does not exit until the message has been received or both side
         // of the channel are inactive and cleaned up.
 
@@ -470,16 +470,15 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                // SAFETY: we are still in the empty state, meaning that the sender will not try
-                // to access the waker until it sees the state set to RECEIVING
+                // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
+                // try to access the waker until it sees the state set to RECEIVING below
                 unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
 
-                // Switch the state from EMPTY to RECEIVING. We need to do this in one
-                // atomic step in case the sender disconnected or sent the message while we wrote
-                // the waker to memory. We don't need to do a compare exchange here however because
-                // if the original state was not EMPTY, then the sender has either finished sending
-                // the message or is being dropped, so the RECEIVING state will never be observed
-                // after we return.
+                // Switch the state to RECEIVING. We need to do this in one atomic step in case the
+                // sender disconnected or sent the message while we wrote the waker to memory. We
+                // don't need to do a compare exchange here however because if the original state
+                // was not EMPTY, then the sender has either finished sending the message or is
+                // being dropped, so the RECEIVING state will never be observed after we return.
                 // ORDERING: we use release ordering so the sender can synchronize with our writing
                 // of the waker to memory. The individual branches handle any additional
                 // synchronizaton
@@ -601,7 +600,7 @@ impl<T> Receiver<T> {
                         // We take the message and mark the channel disconnected.
                         MESSAGE => {
                             // ORDERING: the sender is inactive at this point so we don't need to make
-                            // and reads or writes visible to the sending thread
+                            // any reads or writes visible to the sending thread
                             channel.state.store(DISCONNECTED, Relaxed);
 
                             // SAFETY: we were just in the message state so the message is valid
@@ -751,8 +750,14 @@ impl<T> Receiver<T> {
         )
     }
 
+    /// Begins the process of receiving on the channel by reference. If the message is already
+    /// ready, or the sender has disconnected, then this function will return the appropriate
+    /// Result immediately. Otherwise, it will write the waker to memory, check to see if the
+    /// sender has finished or disconnected again, and then will call `finish`. `finish` is
+    /// thus responsible for cleaning up the channel's resources appropriately before it returns,
+    /// such as destroying the waker, for instance.
     #[cfg(feature = "std")]
-    #[inline(always)]
+    #[inline]
     fn start_recv_ref<E>(
         &self,
         disconnected: impl FnOnce() -> E,
@@ -781,7 +786,7 @@ impl<T> Receiver<T> {
 
                 // ORDERING: we use release ordering on success so the sender can synchronize with
                 // our write of the waker. We use relaxed ordering on failure since the sender does
-                // not need to syncrhonize with our write and the individual match arms handle any
+                // not need to synchronize with our write and the individual match arms handle any
                 // additional synchronization
                 match channel
                     .state
