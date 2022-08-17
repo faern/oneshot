@@ -837,19 +837,19 @@ impl<T> core::future::Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        // TODO: fix this. all of it.
+        // FIXME: relax orderings and fix racy access to the waker if necessary
 
         // SAFETY: The channel will not be freed while this method is still running.
         let channel = unsafe { self.channel_ptr.as_ref() };
 
-        match channel.state.load(Acquire) {
+        match channel.state.load(SeqCst) {
             // The sender is alive but has not sent anything yet.
             EMPTY => unsafe { channel.write_async_waker(cx) },
             // We were polled again while waiting for the sender. Replace the waker with the new one.
             RECEIVING => {
                 match channel
                     .state
-                    .compare_exchange(RECEIVING, EMPTY, Relaxed, Relaxed)
+                    .compare_exchange(RECEIVING, EMPTY, SeqCst, SeqCst)
                 {
                     // We successfully changed the state back to EMPTY. Replace the waker.
                     Ok(RECEIVING) => {
@@ -860,8 +860,7 @@ impl<T> core::future::Future for Receiver<T> {
                     // We take the message and mark the channel disconnected.
                     // The sender has already taken the waker.
                     Err(MESSAGE) => {
-                        fence(Acquire);
-                        channel.state.store(DISCONNECTED, Relaxed);
+                        channel.state.store(DISCONNECTED, SeqCst);
                         Poll::Ready(Ok(unsafe { channel.take_message() }))
                     }
                     // The sender was dropped before sending anything while we prepared to park.
@@ -877,7 +876,7 @@ impl<T> core::future::Future for Receiver<T> {
             }
             // The sender sent the message.
             MESSAGE => {
-                channel.state.store(DISCONNECTED, Relaxed);
+                channel.state.store(DISCONNECTED, SeqCst);
                 Poll::Ready(Ok(unsafe { channel.take_message() }))
             }
             // The sender was dropped before sending anything, or we already received the message.
