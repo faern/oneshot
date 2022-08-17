@@ -588,33 +588,30 @@ impl<T> Receiver<T> {
     /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_ref(&self) -> Result<T, RecvError> {
-        self.start_recv_ref(
-            || RecvError,
-            |channel| {
-                loop {
-                    thread::park();
+        self.start_recv_ref(RecvError, |channel| {
+            loop {
+                thread::park();
 
-                    // ORDERING: we use acquire ordering to synchronize with the write of the message
-                    match channel.state.load(Acquire) {
-                        // The sender sent the message while we were parked.
-                        // We take the message and mark the channel disconnected.
-                        MESSAGE => {
-                            // ORDERING: the sender is inactive at this point so we don't need to make
-                            // any reads or writes visible to the sending thread
-                            channel.state.store(DISCONNECTED, Relaxed);
+                // ORDERING: we use acquire ordering to synchronize with the write of the message
+                match channel.state.load(Acquire) {
+                    // The sender sent the message while we were parked.
+                    // We take the message and mark the channel disconnected.
+                    MESSAGE => {
+                        // ORDERING: the sender is inactive at this point so we don't need to make
+                        // any reads or writes visible to the sending thread
+                        channel.state.store(DISCONNECTED, Relaxed);
 
-                            // SAFETY: we were just in the message state so the message is valid
-                            break Ok(unsafe { channel.take_message() });
-                        }
-                        // The sender was dropped while we were parked.
-                        DISCONNECTED => break Err(RecvError),
-                        // State did not change, spurious wakeup, park again.
-                        RECEIVING | UNPARKING => (),
-                        _ => unreachable!(),
+                        // SAFETY: we were just in the message state so the message is valid
+                        break Ok(unsafe { channel.take_message() });
                     }
+                    // The sender was dropped while we were parked.
+                    DISCONNECTED => break Err(RecvError),
+                    // State did not change, spurious wakeup, park again.
+                    RECEIVING | UNPARKING => (),
+                    _ => unreachable!(),
                 }
-            },
-        )
+            }
+        })
     }
 
     /// Like [`Receiver::recv`], but will not block longer than `timeout`. Returns:
@@ -678,76 +675,73 @@ impl<T> Receiver<T> {
             }
         }
 
-        self.start_recv_ref(
-            || RecvTimeoutError::Disconnected,
-            |channel| {
-                loop {
-                    match deadline.checked_duration_since(Instant::now()) {
-                        Some(timeout) => {
-                            thread::park_timeout(timeout);
+        self.start_recv_ref(RecvTimeoutError::Disconnected, |channel| {
+            loop {
+                match deadline.checked_duration_since(Instant::now()) {
+                    Some(timeout) => {
+                        thread::park_timeout(timeout);
 
-                            // ORDERING: synchronize with the write of the message
-                            match channel.state.load(Acquire) {
-                                // The sender sent the message while we were parked.
-                                MESSAGE => {
-                                    // ORDERING: the sender has been `mem::forget`-ed so this update
-                                    // only needs to be visible to us.
-                                    channel.state.store(DISCONNECTED, Relaxed);
+                        // ORDERING: synchronize with the write of the message
+                        match channel.state.load(Acquire) {
+                            // The sender sent the message while we were parked.
+                            MESSAGE => {
+                                // ORDERING: the sender has been `mem::forget`-ed so this update
+                                // only needs to be visible to us.
+                                channel.state.store(DISCONNECTED, Relaxed);
 
-                                    // SAFETY: we either are in the message state or were just in the
-                                    // message state
-                                    break Ok(unsafe { channel.take_message() });
-                                }
-                                // The sender was dropped while we were parked.
-                                DISCONNECTED => break Err(RecvTimeoutError::Disconnected),
-                                // State did not change, spurious wakeup, park again.
-                                RECEIVING | UNPARKING => (),
-                                _ => unreachable!(),
+                                // SAFETY: we either are in the message state or were just in the
+                                // message state
+                                break Ok(unsafe { channel.take_message() });
                             }
+                            // The sender was dropped while we were parked.
+                            DISCONNECTED => break Err(RecvTimeoutError::Disconnected),
+                            // State did not change, spurious wakeup, park again.
+                            RECEIVING | UNPARKING => (),
+                            _ => unreachable!(),
                         }
-                        None => {
-                            // ORDERING: synchronize with the write of the message
-                            match channel.state.swap(EMPTY, Acquire) {
-                                // We reached the end of the timeout without receiving a message
-                                RECEIVING => {
-                                    // SAFETY: we were in th receiving state and are now in the empty
-                                    // state, so the sender has not and will not try to read the waker,
-                                    // so we have exclusive access to drop it.
-                                    unsafe { channel.drop_waker() };
+                    }
+                    None => {
+                        // ORDERING: synchronize with the write of the message
+                        match channel.state.swap(EMPTY, Acquire) {
+                            // We reached the end of the timeout without receiving a message
+                            RECEIVING => {
+                                // SAFETY: we were in th receiving state and are now in the empty
+                                // state, so the sender has not and will not try to read the waker,
+                                // so we have exclusive access to drop it.
+                                unsafe { channel.drop_waker() };
 
-                                    break Err(RecvTimeoutError::Timeout);
-                                }
-                                // The sender sent the message while we were parked.
-                                MESSAGE => {
-                                    // Same safety and ordering as the Some branch
-
-                                    channel.state.store(DISCONNECTED, Relaxed);
-                                    break Ok(unsafe { channel.take_message() });
-                                }
-                                // The sender was dropped while we were parked.
-                                DISCONNECTED => {
-                                    // ORDERING: we were originally in the disconnected state meaning
-                                    // that the sender is inactive and no longer observing the state,
-                                    // so we only need to change it back to DISCONNECTED for if the
-                                    // receiver is dropped or a recv* method is called again
-                                    channel.state.store(DISCONNECTED, Relaxed);
-
-                                    break Err(RecvTimeoutError::Disconnected);
-                                }
-                                UNPARKING => {
-                                    // We were in the UNPARKING state and are now in the EMPTY state.
-                                    // We wait to be unparked since this is the only way to maintain
-                                    // correctness with intrusive memory.
-
-                                    break wait_for_unpark(channel);
-                                }
-                                _ => unreachable!(),
+                                break Err(RecvTimeoutError::Timeout);
                             }
+                            // The sender sent the message while we were parked.
+                            MESSAGE => {
+                                // Same safety and ordering as the Some branch
+
+                                channel.state.store(DISCONNECTED, Relaxed);
+                                break Ok(unsafe { channel.take_message() });
+                            }
+                            // The sender was dropped while we were parked.
+                            DISCONNECTED => {
+                                // ORDERING: we were originally in the disconnected state meaning
+                                // that the sender is inactive and no longer observing the state,
+                                // so we only need to change it back to DISCONNECTED for if the
+                                // receiver is dropped or a recv* method is called again
+                                channel.state.store(DISCONNECTED, Relaxed);
+
+                                break Err(RecvTimeoutError::Disconnected);
+                            }
+                            UNPARKING => {
+                                // We were in the UNPARKING state and are now in the EMPTY state.
+                                // We wait to be unparked since this is the only way to maintain
+                                // correctness with intrusive memory.
+
+                                break wait_for_unpark(channel);
+                            }
+                            _ => unreachable!(),
                         }
                     }
                 }
-            },
-        )
+            }
+        })
     }
 
     /// Begins the process of receiving on the channel by reference. If the message is already
@@ -760,7 +754,7 @@ impl<T> Receiver<T> {
     #[inline]
     fn start_recv_ref<E>(
         &self,
-        disconnected: impl FnOnce() -> E,
+        disconnected_error: E,
         finish: impl FnOnce(&Channel<T>) -> Result<T, E>,
     ) -> Result<T, E> {
         // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
@@ -813,7 +807,7 @@ impl<T> Receiver<T> {
                     Err(DISCONNECTED) => {
                         // See comments in `recv` for safety
                         unsafe { channel.drop_waker() };
-                        Err(disconnected())
+                        Err(disconnected_error)
                     }
                     _ => unreachable!(),
                 }
@@ -828,7 +822,7 @@ impl<T> Receiver<T> {
                 Ok(unsafe { channel.take_message() })
             }
             // The sender was dropped before sending anything, or we already received the message.
-            DISCONNECTED => Err(disconnected()),
+            DISCONNECTED => Err(disconnected_error),
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
             RECEIVING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
