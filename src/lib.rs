@@ -794,7 +794,7 @@ impl<T> Receiver<T> {
                 {
                     // We stored our waker, now we delegate to the callback to finish the receive
                     // operation
-                    Ok(EMPTY) => finish(channel),
+                    Ok(_) => finish(channel),
                     // The sender sent the message while we prepared to finish
                     Err(MESSAGE) => {
                         // See comments in `recv` for ordering and safety
@@ -857,7 +857,7 @@ impl<T> core::future::Future for Receiver<T> {
                     .compare_exchange(RECEIVING, EMPTY, SeqCst, SeqCst)
                 {
                     // We successfully changed the state back to EMPTY. Replace the waker.
-                    Ok(RECEIVING) => {
+                    Ok(_) => {
                         unsafe { channel.drop_waker() };
                         unsafe { channel.write_async_waker(cx) }
                     }
@@ -1074,7 +1074,7 @@ impl<T> Channel<T> {
             .compare_exchange(EMPTY, RECEIVING, SeqCst, SeqCst)
         {
             // We stored our waker, now we return and let the sender wake us up
-            Ok(EMPTY) => Poll::Pending,
+            Ok(_) => Poll::Pending,
             // The sender was dropped before sending anything while we prepared to park.
             Err(DISCONNECTED) => {
                 self.drop_waker();
