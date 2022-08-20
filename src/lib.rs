@@ -865,6 +865,8 @@ impl<T> core::future::Future for Receiver<T> {
                     .compare_exchange(RECEIVING, EMPTY, Relaxed, Relaxed)
                 {
                     // We successfully changed the state back to EMPTY. Replace the waker.
+                    // This is the most likely branch to be taken, which is why we don't use any
+                    // memory barriers in the compare_exchange above.
                     Ok(_) => {
                         // SAFETY: We wrote the waker in a previous call to poll. We do not need
                         // a memory barrier since the previous write here was by ourselves.
