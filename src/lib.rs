@@ -918,15 +918,13 @@ impl<T> core::future::Future for Receiver<T> {
                 hint::spin_loop();
                 // ORDERING: The load above has already synchronized with the write of the message,
                 // since the sender writes the message before it sets UNPARKING.
-                match channel
+                if channel
                     .state
                     .compare_exchange_weak(MESSAGE, DISCONNECTED, Relaxed, Relaxed)
+                    .is_ok()
                 {
-                    // The sender has finished taking the waker
                     // SAFETY: We observed the MESSAGE state
-                    Ok(_) => break Poll::Ready(Ok(unsafe { channel.take_message() })),
-                    Err(UNPARKING) => (),
-                    _ => unreachable!(),
+                    break Poll::Ready(Ok(unsafe { channel.take_message() }));
                 }
             },
             _ => unreachable!(),
