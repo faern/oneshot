@@ -657,7 +657,7 @@ impl<T> Receiver<T> {
         /// when calling this function. The message must also already have been written to
         /// the channel and an acquire memory barrier issued to synchronize with that write.
         #[cold]
-        unsafe fn wait_for_unpark<T>(channel: &Channel<T>) -> Result<T, RecvTimeoutError> {
+        unsafe fn wait_for_unpark<T>(channel: &Channel<T>) -> T {
             // We have observed the sender setting the UNPARKING state, and we swapped
             // to the EMPTY state. The state is guaranteed to be EMPTY until the sender
             // sets it to MESSAGE. No other states are possible here.
@@ -673,7 +673,7 @@ impl<T> Receiver<T> {
                     .is_ok()
                 {
                     // SAFETY: See safety requirements of this function.
-                    break Ok(channel.take_message());
+                    break channel.take_message();
                 }
             }
         }
@@ -738,7 +738,7 @@ impl<T> Receiver<T> {
                                 // We wait to be properly unparked and to observe the MESSAGE
                                 // state. We need to swap the state back to DISCONNECTED
                                 // in order to avoid reading the message twice.
-                                break unsafe { wait_for_unpark(channel) };
+                                break Ok(unsafe { wait_for_unpark(channel) });
                             }
                             _ => unreachable!(),
                         }
