@@ -852,7 +852,7 @@ impl<T> core::future::Future for Receiver<T> {
         match channel.state.load(Acquire) {
             // The sender is alive but has not sent anything yet.
             EMPTY => {
-                // SAFETY: We are in the EMPTY state and no valid waker in the channel.
+                // SAFETY: We can't be in the forbidden states, and no waker in the channel.
                 unsafe { channel.write_async_waker(cx) }
             }
             // We were polled again while waiting for the sender. Replace the waker with the new one.
@@ -871,7 +871,7 @@ impl<T> core::future::Future for Receiver<T> {
                         // SAFETY: We wrote the waker in a previous call to poll. We do not need
                         // a memory barrier since the previous write here was by ourselves.
                         unsafe { channel.drop_waker() };
-                        // SAFETY: We are in the EMPTY state and no valid waker in the channel.
+                        // SAFETY: We can't be in the forbidden states, and no waker in the channel.
                         unsafe { channel.write_async_waker(cx) }
                     }
                     // The sender sent the message while we prepared to replace the waker.
@@ -1108,8 +1108,8 @@ impl<T> Channel<T> {
 
     /// # Safety
     ///
-    /// * Channel state must be EMPTY when calling this method.
     /// * `Channel::waker` must not have a waker stored in it when calling this method.
+    /// * Channel state must not be RECEIVING or UNPARKING when calling this method.
     #[cfg(feature = "async")]
     unsafe fn write_async_waker(&self, cx: &mut task::Context<'_>) -> Poll<Result<T, RecvError>> {
         // Write our thread instance to the channel.
