@@ -891,9 +891,8 @@ impl<T> core::future::Future for Receiver<T> {
                     Err(UNPARKING) => {
                         // We can't trust that the old waker that the sender has access to
                         // is honored by the async runtime at this point. So we wake ourselves
-                        // up to we get polled instantly again.
+                        // up to get polled instantly again.
                         cx.waker().wake_by_ref();
-                        hint::spin_loop();
                         Poll::Pending
                     }
                     _ => unreachable!(),
