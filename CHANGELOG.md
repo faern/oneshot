@@ -19,10 +19,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Upgrade to Rust edition 2021. Also increases the MSRV to Rust 1.60.
 - Add null-pointer optimization to `Sender`, `Receiver` and `SendError`.
   This reduces the call stack size of Sender::send and it makes
-  `Option<Sender>` and `Option<Receiver>` pointer sized.
+  `Option<Sender>` and `Option<Receiver>` pointer sized (#18).
+- Relax the memory ordering of all atomic operations from `SeqCst` to the most appropriate
+  lower ordering (#17 + #20).
 
 ### Fixed
-- Fix undefined behavior due to multiple mutable references to the same channel instance
+- Fix undefined behavior due to multiple mutable references to the same channel instance (#18).
+- Fix race condition that could happen during unparking of a receiving `Receiver` (#17 + #20).
 
 
 ## [0.1.3] - 2021-11-23
