@@ -900,31 +900,30 @@ impl<T> core::future::Future for Receiver<T> {
             }
             // The sender sent the message.
             MESSAGE => {
-                // ORDERING: the sender has been `mem::forget`-ed so this update only needs to be
+                // ORDERING: the sender has been dropped so this update only needs to be
                 // visible to us
                 channel.state.store(DISCONNECTED, Relaxed);
                 Poll::Ready(Ok(unsafe { channel.take_message() }))
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Poll::Ready(Err(RecvError)),
-            // The sender has written the message and is currently reading the waker from a
-            // previous poll. This means the message is already written. But we need to loop here
-            // until we observe the MESSAGE state, so we can flip it to DISCONNECTED, to avoid
-            // reading the message twice.
-            // We busy loop here since we know the sender is done very soon. Waking ourselves up
-            // and return Poll::Pending here would also result in a busy loop that is likely
-            // more expensive.
+            // The sender has observed the RECEIVING state and is currently reading the waker from
+            // a previous poll. We need to loop here until we observe the MESSAGE or DISCONNECTED
+            // state. We busy loop here since we know the sender is done very soon.
             UNPARKING => loop {
                 hint::spin_loop();
-                // ORDERING: The load above has already synchronized with the write of the message,
-                // since the sender writes the message before it sets UNPARKING.
-                if channel
-                    .state
-                    .compare_exchange_weak(MESSAGE, DISCONNECTED, Relaxed, Relaxed)
-                    .is_ok()
-                {
-                    // SAFETY: We observed the MESSAGE state
-                    break Poll::Ready(Ok(unsafe { channel.take_message() }));
+                // ORDERING: The load above has already synchronized with the write of the message.
+                match channel.state.load(Relaxed) {
+                    MESSAGE => {
+                        // ORDERING: the sender has been dropped, so this update only
+                        // needs to be visible to us
+                        channel.state.store(DISCONNECTED, Relaxed);
+                        // SAFETY: We observed the MESSAGE state
+                        break Poll::Ready(Ok(unsafe { channel.take_message() }));
+                    }
+                    DISCONNECTED => break Poll::Ready(Err(RecvError)),
+                    UNPARKING => (),
+                    _ => unreachable!(),
                 }
             },
             _ => unreachable!(),
