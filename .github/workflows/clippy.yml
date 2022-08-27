@@ -1,11 +1,11 @@
 name: Rust linting
 on:
-    push:
-        paths:
-            - .github/workflows/clippy.yml
-            - '**/*.rs'
-    pull_request:
-    workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/clippy.yml
+      - '**/*.rs'
+  pull_request:
+  workflow_dispatch:
 jobs:
   clippy-check:
     runs-on: ubuntu-latest
