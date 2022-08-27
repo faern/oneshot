@@ -152,6 +152,38 @@ fn recv_before_send() {
     })
 }
 
+#[cfg(all(feature = "std", loom))]
+#[test]
+fn send_recv_different_threads() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel();
+        let t2 = thread::spawn(move || {
+            assert_eq!(receiver.recv_timeout(Duration::from_millis(1)), Ok(9));
+        });
+        let t1 = thread::spawn(move || {
+            sender.send(9u128).unwrap();
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+    })
+}
+
+#[cfg(all(feature = "std", loom))]
+#[test]
+fn recv_drop_sender_different_threads() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<u128>();
+        let t2 = thread::spawn(move || {
+            assert!(receiver.recv_timeout(Duration::from_millis(0)).is_err());
+        });
+        let t1 = thread::spawn(move || {
+            drop(sender);
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+    })
+}
+
 #[cfg(feature = "std")]
 #[test]
 fn recv_timeout_before_send() {
