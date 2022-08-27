@@ -1,5 +1,5 @@
 name: Cargo build and test
-on: [push, pull_request, workflow_dispatch]
+on: [pull_request, workflow_dispatch]
 env:
   LOOM_MAX_BRANCHES: 100000
   RUSTFLAGS: "--deny warnings "
