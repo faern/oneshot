@@ -653,27 +653,26 @@ impl<T> Receiver<T> {
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         /// # Safety
         ///
-        /// The state must be EMPTY (in this case that means UNPARKING) or MESSAGE
-        /// when calling this function. The message must also already have been written to
-        /// the channel and an acquire memory barrier issued to synchronize with that write.
+        /// If the sender is unparking us after a message send, the message must already have been
+        /// written to the channel and an acquire memory barrier issued before calling this function
         #[cold]
-        unsafe fn wait_for_unpark<T>(channel: &Channel<T>) -> T {
-            // We have observed the sender setting the UNPARKING state, and we swapped
-            // to the EMPTY state. The state is guaranteed to be EMPTY until the sender
-            // sets it to MESSAGE. No other states are possible here.
+        unsafe fn wait_for_unpark<T>(channel: &Channel<T>) -> Result<T, RecvTimeoutError> {
             loop {
                 thread::park();
-                // ORDERING: This function requires that the message write has already been synchronized
-                // with.
-                // We can't use compare_exchange_weak here since a spurious failure could lead to us
-                // parking indefinitely.
-                if channel
-                    .state
-                    .compare_exchange(MESSAGE, DISCONNECTED, Relaxed, Relaxed)
-                    .is_ok()
-                {
-                    // SAFETY: See safety requirements of this function.
-                    break channel.take_message();
+
+                // ORDERING: The callee has already synchronized with any message write
+                match channel.state.load(Relaxed) {
+                    MESSAGE => {
+                        // ORDERING: the sender has been dropped, so this update only
+                        // needs to be visible to us
+                        channel.state.store(DISCONNECTED, Relaxed);
+                        break Ok(channel.take_message());
+                    }
+                    DISCONNECTED => break Err(RecvTimeoutError::Disconnected),
+                    // The sender is still unparking us. We continue on the empty state here since
+                    // the current implementation eagerly sets the state to EMPTY upon timeout.
+                    EMPTY => (),
+                    _ => unreachable!(),
                 }
             }
         }
@@ -735,10 +734,10 @@ impl<T> Receiver<T> {
                             // The sender sent the message and started unparking us
                             UNPARKING => {
                                 // We were in the UNPARKING state and are now in the EMPTY state.
-                                // We wait to be properly unparked and to observe the MESSAGE
-                                // state. We need to swap the state back to DISCONNECTED
-                                // in order to avoid reading the message twice.
-                                break Ok(unsafe { wait_for_unpark(channel) });
+                                // We wait to be properly unparked and to observe if the sender
+                                // sets MESSAGE or DISCONNECTED state.
+                                // SAFETY: The load above has synchronized with any message write.
+                                break unsafe { wait_for_unpark(channel) };
                             }
                             _ => unreachable!(),
                         }
