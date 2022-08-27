@@ -248,7 +248,7 @@ fn recv_deadline_and_timeout_no_time() {
 // This test doesn't give meaningful results when run with oneshot_test_delay and loom
 #[cfg(all(feature = "std", not(all(oneshot_test_delay, loom))))]
 #[test]
-fn recv_deadline_and_timeout_time_should_elapse() {
+fn recv_deadline_time_should_elapse() {
     maybe_loom_model(|| {
         let (_sender, receiver) = oneshot::channel::<u128>();
 
@@ -263,8 +263,21 @@ fn recv_deadline_and_timeout_time_should_elapse() {
         );
         assert!(start.elapsed() > timeout);
         assert!(start.elapsed() < timeout * 3);
+    })
+}
+
+#[cfg(all(feature = "std", not(all(oneshot_test_delay, loom))))]
+#[test]
+fn recv_timeout_time_should_elapse() {
+    maybe_loom_model(|| {
+        let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
+        #[cfg(not(loom))]
+        let timeout = Duration::from_millis(100);
+        #[cfg(loom)]
+        let timeout = Duration::from_millis(1);
+
         assert_eq!(
             receiver.recv_timeout(timeout),
             Err(RecvTimeoutError::Timeout)
