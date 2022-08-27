@@ -2,6 +2,7 @@ name: Cargo build and test
 on: [pull_request, workflow_dispatch]
 env:
   LOOM_MAX_BRANCHES: 100000
+  CARGO_TERM_COLOR: always
   RUSTFLAGS: "--deny warnings "
 jobs:
   build-and-test:
