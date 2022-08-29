@@ -152,6 +152,38 @@ fn recv_before_send() {
     })
 }
 
+#[cfg(all(feature = "std", loom))]
+#[test]
+fn send_recv_different_threads() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel();
+        let t2 = thread::spawn(move || {
+            assert_eq!(receiver.recv_timeout(Duration::from_millis(1)), Ok(9));
+        });
+        let t1 = thread::spawn(move || {
+            sender.send(9u128).unwrap();
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+    })
+}
+
+#[cfg(all(feature = "std", loom))]
+#[test]
+fn recv_drop_sender_different_threads() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<u128>();
+        let t2 = thread::spawn(move || {
+            assert!(receiver.recv_timeout(Duration::from_millis(0)).is_err());
+        });
+        let t1 = thread::spawn(move || {
+            drop(sender);
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+    })
+}
+
 #[cfg(feature = "std")]
 #[test]
 fn recv_timeout_before_send() {
@@ -248,7 +280,7 @@ fn recv_deadline_and_timeout_no_time() {
 // This test doesn't give meaningful results when run with oneshot_test_delay and loom
 #[cfg(all(feature = "std", not(all(oneshot_test_delay, loom))))]
 #[test]
-fn recv_deadline_and_timeout_time_should_elapse() {
+fn recv_deadline_time_should_elapse() {
     maybe_loom_model(|| {
         let (_sender, receiver) = oneshot::channel::<u128>();
 
@@ -263,8 +295,21 @@ fn recv_deadline_and_timeout_time_should_elapse() {
         );
         assert!(start.elapsed() > timeout);
         assert!(start.elapsed() < timeout * 3);
+    })
+}
+
+#[cfg(all(feature = "std", not(all(oneshot_test_delay, loom))))]
+#[test]
+fn recv_timeout_time_should_elapse() {
+    maybe_loom_model(|| {
+        let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
+        #[cfg(not(loom))]
+        let timeout = Duration::from_millis(100);
+        #[cfg(loom)]
+        let timeout = Duration::from_millis(1);
+
         assert_eq!(
             receiver.recv_timeout(timeout),
             Err(RecvTimeoutError::Timeout)

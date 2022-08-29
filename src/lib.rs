@@ -403,7 +403,7 @@ impl<T> Receiver<T> {
         // SAFETY: The channel will not be freed while this method is still running.
         let channel = unsafe { self.channel_ptr.as_ref() };
 
-        // ORDERING: we use acquire ordering to synchronize with the store of the message
+        // ORDERING: we use acquire ordering to synchronize with the store of the message.
         match channel.state.load(Acquire) {
             MESSAGE => {
                 // It's okay to break up the load and store since once we're in the message state
@@ -651,24 +651,26 @@ impl<T> Receiver<T> {
     /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
+        /// # Safety
+        ///
+        /// If the sender is unparking us after a message send, the message must already have been
+        /// written to the channel and an acquire memory barrier issued before calling this function
         #[cold]
-        fn wait_for_unpark<T>(channel: &Channel<T>) -> Result<T, RecvTimeoutError> {
+        unsafe fn wait_for_unpark<T>(channel: &Channel<T>) -> Result<T, RecvTimeoutError> {
             loop {
                 thread::park();
 
-                // Same ordering as usual
-                match channel.state.load(Acquire) {
+                // ORDERING: The callee has already synchronized with any message write
+                match channel.state.load(Relaxed) {
                     MESSAGE => {
-                        // Same ordering and safety as usual
-
+                        // ORDERING: the sender has been dropped, so this update only
+                        // needs to be visible to us
                         channel.state.store(DISCONNECTED, Relaxed);
-                        break Ok(unsafe { channel.take_message() });
+                        break Ok(channel.take_message());
                     }
-                    DISCONNECTED => {
-                        break Err(RecvTimeoutError::Disconnected);
-                    }
-                    // We continue on the empty state here since the current implementation eagerly
-                    // sets the state to EMPTY upon timeout.
+                    DISCONNECTED => break Err(RecvTimeoutError::Disconnected),
+                    // The sender is still unparking us. We continue on the empty state here since
+                    // the current implementation eagerly sets the state to EMPTY upon timeout.
                     EMPTY => (),
                     _ => unreachable!(),
                 }
@@ -705,7 +707,7 @@ impl<T> Receiver<T> {
                         match channel.state.swap(EMPTY, Acquire) {
                             // We reached the end of the timeout without receiving a message
                             RECEIVING => {
-                                // SAFETY: we were in th receiving state and are now in the empty
+                                // SAFETY: we were in the receiving state and are now in the empty
                                 // state, so the sender has not and will not try to read the waker,
                                 // so we have exclusive access to drop it.
                                 unsafe { channel.drop_waker() };
@@ -729,12 +731,13 @@ impl<T> Receiver<T> {
 
                                 break Err(RecvTimeoutError::Disconnected);
                             }
+                            // The sender sent the message and started unparking us
                             UNPARKING => {
                                 // We were in the UNPARKING state and are now in the EMPTY state.
-                                // We wait to be unparked since this is the only way to maintain
-                                // correctness with intrusive memory.
-
-                                break wait_for_unpark(channel);
+                                // We wait to be properly unparked and to observe if the sender
+                                // sets MESSAGE or DISCONNECTED state.
+                                // SAFETY: The load above has synchronized with any message write.
+                                break unsafe { wait_for_unpark(channel) };
                             }
                             _ => unreachable!(),
                         }
@@ -774,9 +777,9 @@ impl<T> Receiver<T> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
-                unsafe {
-                    channel.write_waker(ReceiverWaker::current_thread());
-                }
+                // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
+                // try to access the waker until it sees the state set to RECEIVING below
+                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
 
                 // ORDERING: we use release ordering on success so the sender can synchronize with
                 // our write of the waker. We use relaxed ordering on failure since the sender does
@@ -801,6 +804,8 @@ impl<T> Receiver<T> {
                         // needs to be visible to us
                         channel.state.store(DISCONNECTED, Relaxed);
 
+                        // SAFETY: The MESSAGE state tells us there is a correctly initialized
+                        // message
                         Ok(unsafe { channel.take_message() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
@@ -836,38 +841,57 @@ impl<T> core::future::Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        // FIXME: relax orderings and fix racy access to the waker if necessary
-
-        // SAFETY: The channel will not be freed while this method is still running.
+        // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
+        // is still alive, meaning that even if the sender was dropped then it would have observed
+        // the fact that we're still alive and left the responsibility of deallocating the
+        // channel to us, so `self.channel` is valid
         let channel = unsafe { self.channel_ptr.as_ref() };
 
-        match channel.state.load(SeqCst) {
+        // ORDERING: we use acquire ordering to synchronize with the store of the message.
+        match channel.state.load(Acquire) {
             // The sender is alive but has not sent anything yet.
-            EMPTY => unsafe { channel.write_async_waker(cx) },
+            EMPTY => {
+                // SAFETY: We can't be in the forbidden states, and no waker in the channel.
+                unsafe { channel.write_async_waker(cx) }
+            }
             // We were polled again while waiting for the sender. Replace the waker with the new one.
             RECEIVING => {
+                // ORDERING: We use relaxed ordering on both success and failure since we have not
+                // written anything above that must be released, and the individual match arms
+                // handle any additional synchronization.
                 match channel
                     .state
-                    .compare_exchange(RECEIVING, EMPTY, SeqCst, SeqCst)
+                    .compare_exchange(RECEIVING, EMPTY, Relaxed, Relaxed)
                 {
                     // We successfully changed the state back to EMPTY. Replace the waker.
+                    // This is the most likely branch to be taken, which is why we don't use any
+                    // memory barriers in the compare_exchange above.
                     Ok(_) => {
+                        // SAFETY: We wrote the waker in a previous call to poll. We do not need
+                        // a memory barrier since the previous write here was by ourselves.
                         unsafe { channel.drop_waker() };
+                        // SAFETY: We can't be in the forbidden states, and no waker in the channel.
                         unsafe { channel.write_async_waker(cx) }
                     }
                     // The sender sent the message while we prepared to replace the waker.
                     // We take the message and mark the channel disconnected.
                     // The sender has already taken the waker.
                     Err(MESSAGE) => {
-                        channel.state.store(DISCONNECTED, SeqCst);
+                        // ORDERING: Synchronize with the write of the message. This branch is
+                        // unlikely to be taken.
+                        channel.state.swap(DISCONNECTED, Acquire);
+                        // SAFETY: The state tells us the sender has initialized the message.
                         Poll::Ready(Ok(unsafe { channel.take_message() }))
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     // The sender has taken the waker already.
                     Err(DISCONNECTED) => Poll::Ready(Err(RecvError)),
+                    // The sender is currently waking us up.
                     Err(UNPARKING) => {
+                        // We can't trust that the old waker that the sender has access to
+                        // is honored by the async runtime at this point. So we wake ourselves
+                        // up to get polled instantly again.
                         cx.waker().wake_by_ref();
-                        hint::spin_loop();
                         Poll::Pending
                     }
                     _ => unreachable!(),
@@ -875,11 +899,32 @@ impl<T> core::future::Future for Receiver<T> {
             }
             // The sender sent the message.
             MESSAGE => {
-                channel.state.store(DISCONNECTED, SeqCst);
+                // ORDERING: the sender has been dropped so this update only needs to be
+                // visible to us
+                channel.state.store(DISCONNECTED, Relaxed);
                 Poll::Ready(Ok(unsafe { channel.take_message() }))
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Poll::Ready(Err(RecvError)),
+            // The sender has observed the RECEIVING state and is currently reading the waker from
+            // a previous poll. We need to loop here until we observe the MESSAGE or DISCONNECTED
+            // state. We busy loop here since we know the sender is done very soon.
+            UNPARKING => loop {
+                hint::spin_loop();
+                // ORDERING: The load above has already synchronized with the write of the message.
+                match channel.state.load(Relaxed) {
+                    MESSAGE => {
+                        // ORDERING: the sender has been dropped, so this update only
+                        // needs to be visible to us
+                        channel.state.store(DISCONNECTED, Relaxed);
+                        // SAFETY: We observed the MESSAGE state
+                        break Poll::Ready(Ok(unsafe { channel.take_message() }));
+                    }
+                    DISCONNECTED => break Poll::Ready(Err(RecvError)),
+                    UNPARKING => (),
+                    _ => unreachable!(),
+                }
+            },
             _ => unreachable!(),
         }
     }
@@ -1056,30 +1101,53 @@ impl<T> Channel<T> {
         self.with_waker_mut(|slot| slot.assume_init_drop());
     }
 
+    /// # Safety
+    ///
+    /// * `Channel::waker` must not have a waker stored in it when calling this method.
+    /// * Channel state must not be RECEIVING or UNPARKING when calling this method.
     #[cfg(feature = "async")]
     unsafe fn write_async_waker(&self, cx: &mut task::Context<'_>) -> Poll<Result<T, RecvError>> {
-        // FIXME: relax orderings and fix racy access to the waker if necessary
-
         // Write our thread instance to the channel.
+        // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
+        // try to access the waker until it sees the state set to RECEIVING below
         self.write_waker(ReceiverWaker::task_waker(cx));
 
+        // ORDERING: we use release ordering on success so the sender can synchronize with
+        // our write of the waker. We use relaxed ordering on failure since the sender does
+        // not need to synchronize with our write and the individual match arms handle any
+        // additional synchronization
         match self
             .state
-            .compare_exchange(EMPTY, RECEIVING, SeqCst, SeqCst)
+            .compare_exchange(EMPTY, RECEIVING, Release, Relaxed)
         {
             // We stored our waker, now we return and let the sender wake us up
             Ok(_) => Poll::Pending,
-            // The sender was dropped before sending anything while we prepared to park.
-            Err(DISCONNECTED) => {
-                self.drop_waker();
-                Poll::Ready(Err(RecvError))
-            }
             // The sender sent the message while we prepared to park.
             // We take the message and mark the channel disconnected.
             Err(MESSAGE) => {
+                // ORDERING: Synchronize with the write of the message. This branch is
+                // unlikely to be taken, so it's likely more efficient to use a fence here
+                // instead of AcqRel ordering on the compare_exchange operation
+                fence(Acquire);
+
+                // SAFETY: we started in the EMPTY state and the sender switched us to the
+                // MESSAGE state. This means that it did not take the waker, so we're
+                // responsible for dropping it.
                 self.drop_waker();
-                self.state.store(DISCONNECTED, SeqCst);
+
+                // ORDERING: sender does not exist, so this update only needs to be visible to us
+                self.state.store(DISCONNECTED, Relaxed);
+
+                // SAFETY: The MESSAGE state tells us there is a correctly initialized message
                 Poll::Ready(Ok(self.take_message()))
+            }
+            // The sender was dropped before sending anything while we prepared to park.
+            Err(DISCONNECTED) => {
+                // SAFETY: we started in the EMPTY state and the sender switched us to the
+                // DISCONNECTED state. This means that it did not take the waker, so we're
+                // responsible for dropping it.
+                self.drop_waker();
+                Poll::Ready(Err(RecvError))
             }
             _ => unreachable!(),
         }
