@@ -93,12 +93,6 @@ invalid usage, kind of like valgrind.
 
 [loom]: https://crates.io/crates/loom
 
-### Atomic ordering
-
-The library currently uses sequential consistency for all atomic operations. This is to be somewhat
-conservative for now. If you understand atomic memory orderings really well, please feel free
-to suggest possible relaxations, I know there are many. Just motivate them well.
-
 ## My message passing frustrations and dreams
 
 Message passing is a very common and good way of synchronization in a concurrent program. But
