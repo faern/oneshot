@@ -418,7 +418,7 @@ impl<T> Receiver<T> {
             EMPTY => Err(TryRecvError::Empty),
             DISCONNECTED => Err(TryRecvError::Disconnected),
             #[cfg(feature = "async")]
-            RECEIVING => Err(TryRecvError::Empty),
+            RECEIVING | UNPARKING => Err(TryRecvError::Empty),
             _ => unreachable!(),
         }
     }

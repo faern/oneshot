@@ -12,6 +12,9 @@ use loom::sync::{
     Arc,
 };
 
+#[cfg(loom)]
+pub mod waker;
+
 pub fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
     #[cfg(loom)]
     loom::model(test);
