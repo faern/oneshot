@@ -1,77 +1,76 @@
-//! Oneshot spsc channel. The sender's send method is non-blocking, lock- and wait-free[1].
+//! Oneshot spsc (single producer, single consumer) channel. Meaning each channel instance
+//! can only transport a single message. This has a few nice outcomes. One thing is that
+//! the implementation can be very efficient, utilizing the knowledge that there will
+//! only be one message. But more importantly, it allows the API to be expressed in such
+//! a way that certain edge cases that you don't want to care about when only sending a
+//! single message on a channel does not exist. For example: The sender can't be copied
+//! or cloned, and the send method takes ownership and consumes the sender.
+//! So you are guaranteed, at the type level, that there can only be one message sent.
+//!
+//! The sender's send method is non-blocking, and potentially lock- and wait-free.
+//! See documentation on [Sender::send] for situations where it might not be fully wait-free.
 //! The receiver supports both lock- and wait-free `try_recv` as well as indefinite and time
 //! limited thread blocking receive operations. The receiver also implements `Future` and
 //! supports asynchronously awaiting the message.
 //!
-//! This is a oneshot channel implementation. Meaning each channel instance can only transport
-//! a single message. This has a few nice outcomes. One thing is that the implementation can
-//! be very efficient, utilizing the knowledge that there will only be one message. But more
-//! importantly, it allows the API to be expressed in such a way that certain edge cases
-//! that you don't want to care about when only sending a single message on a channel does not
-//! exist. For example. The sender can't be copied or cloned and the send method takes ownership
-//! and consumes the sender. So you are guaranteed, at the type level, that there can only be
-//! one message sent.
 //!
 //! # Examples
 //!
-//! A very basic example to just show the API:
+//! This example sets up a background worker that processes requests coming in on a standard
+//! mpsc channel and replies on a oneshot channel provided with each request. The worker can
+//! be interacted with both from sync and async contexts since the oneshot receiver
+//! can receive both blocking and async.
 //!
 //! ```rust
-//! # #[cfg(not(feature = "sync"))]
-//! # fn main() {}
-//! # #[cfg(feature = "sync")]
-//! # fn main() {
-//! # use std::thread;
-//! let (sender, receiver) = oneshot::channel();
-//! thread::spawn(move || {
-//!     sender.send("Hello from worker thread!");
-//! });
+//! use std::sync::mpsc;
+//! use std::thread;
+//! use std::time::Duration;
 //!
-//! let message = receiver.recv().expect("Worker thread does not want to talk :(");
-//! println!("A message from a different thread: {}", message);
-//! # }
-//! ```
+//! type Request = String;
 //!
-//! A slightly larger example showing communicating back work of *different types* during a
-//! long computation. The final result here could have been communicated back via the thread's
-//! `JoinHandle`. But those can't be waited on with a timeout. This is a quite artificial example,
-//! that mostly shows the API.
+//! // Starts a background thread performing some computation on requests sent to it.
+//! // Delivers the response back over a oneshot channel.
+//! fn spawn_processing_thread() -> mpsc::Sender<(Request, oneshot::Sender<usize>)> {
+//!     let (request_sender, request_receiver) = mpsc::channel::<(Request, oneshot::Sender<usize>)>();
+//!     thread::spawn(move || {
+//!         for (request_data, response_sender) in request_receiver.iter() {
+//!             let compute_operation = || request_data.len();
+//!             let _ = response_sender.send(compute_operation()); // <- Send on the oneshot channel
+//!         }
+//!     });
+//!     request_sender
+//! }
 //!
-//! ```rust
-//! # #[cfg(not(feature = "sync"))]
-//! # fn main() {}
-//! # #[cfg(feature = "sync")]
-//! # fn main() {
-//! # use core::time::Duration;
-//! # use std::thread;
-//! # fn expensive_initialization() -> Data { Data }
-//! # struct Data;
-//! # impl Data {
-//! #     fn summary(&self) -> &'static str { "" }
-//! #     fn expensive_computation(self) -> Vec<u8> { Vec::new() }
-//! # }
-//! let (sender1, receiver1) = oneshot::channel();
-//! let (sender2, receiver2) = oneshot::channel();
+//! let processor = spawn_processing_thread();
 //!
-//! let thread = thread::spawn(move || {
-//!     let data_processor = expensive_initialization();
-//!     sender1.send(data_processor.summary()).expect("Main thread not waiting");
-//!     sender2.send(data_processor.expensive_computation()).expect("Main thread not waiting");
-//! });
+//! // If compiled with `std` the library can receive messages with timeout on regular threads
+//! #[cfg(feature = "std")] {
+//!     let (response_sender, response_receiver) = oneshot::channel();
+//!     let request = Request::from("data from sync thread");
 //!
-//! let summary = receiver1.recv().expect("Worker thread died");
-//! println!("Initialized data. Will crunch these numbers: {}", summary);
-//!
-//! let result = loop {
-//!     match receiver2.recv_timeout(Duration::from_secs(1)) {
-//!         Ok(result) => break result,
-//!         Err(oneshot::RecvTimeoutError::Timeout) => println!("Still working..."),
-//!         Err(oneshot::RecvTimeoutError::Disconnected) => panic!("Worker thread died"),
+//!     processor.send((request, response_sender)).expect("Processor down");
+//!     match response_receiver.recv_timeout(Duration::from_secs(1)) { // <- Receive on the oneshot channel
+//!         Ok(result) => println!("Processor returned {}", result),
+//!         Err(oneshot::RecvTimeoutError::Timeout) => eprintln!("Processor was too slow"),
+//!         Err(oneshot::RecvTimeoutError::Disconnected) => panic!("Processor exited"),
 //!     }
-//! };
-//! println!("Done computing. Results: {:?}", result);
-//! thread.join().expect("Worker thread panicked");
-//! # }
+//! }
+//!
+//! // If compiled with the `async` feature, the `Receiver` can be awaited in an async context
+//! #[cfg(feature = "async")] {
+//!     tokio::runtime::Runtime::new()
+//!         .unwrap()
+//!         .block_on(async move {
+//!             let (response_sender, response_receiver) = oneshot::channel();
+//!             let request = Request::from("data from sync thread");
+//!
+//!             processor.send((request, response_sender)).expect("Processor down");
+//!             match response_receiver.await { // <- Receive on the oneshot channel asynchronously
+//!                 Ok(result) => println!("Processor returned {}", result),
+//!                 Err(_e) => panic!("Processor exited"),
+//!             }
+//!         });
+//! }
 //! ```
 //!
 //! # Sync vs async
@@ -81,7 +80,7 @@
 //! task, or the other way around. If message passing is the way you are communicating, of course
 //! that should work smoothly between the sync and async parts of the program!
 //!
-//! This library achieves that by having an almost[1] wait-free send operation that can safely
+//! This library achieves that by having a fast and cheap send operation that can
 //! be used in both sync threads and async tasks. The receiver has both thread blocking
 //! receive methods for synchronous usage, and implements `Future` for asynchronous usage.
 //!
@@ -89,13 +88,11 @@
 //! in an asynchronous task. This implementation is completely executor/runtime agnostic. It should
 //! be possible to use this library with any executor.
 //!
-//! # Footnotes
-//!
-//! [1]: See documentation on [Sender::send] for situations where it might not be fully wait-free.
 
 // # Implementation description
 //
-// When a channel is created via the channel function, it allocates space on the heap to fit:
+// When a channel is created via the channel function, it creates a single heap allocation
+// containing:
 // * A one byte atomic integer that represents the current channel state,
 // * Uninitialized memory to fit the message,
 // * Uninitialized memory to fit the waker that can wake the receiving task or thread up.
@@ -104,26 +101,10 @@
 // So with all features enabled (the default) each channel allocates 25 bytes plus the size of the
 // message, plus any padding needed to get correct memory alignment.
 //
-// The Sender and Receiver only holds a raw pointer to this heap channel object. The last endpoint
+// The Sender and Receiver only holds a raw pointer to the heap channel object. The last endpoint
 // to be consumed or dropped is responsible for freeing the heap memory. The first endpoint to
-// go away signal via the state that it is gone. And the second one see this and frees the memory.
-//
-// Sending on the sender copies the message to the (so far uninitialized) memory region on the
-// heap and swaps the state from whatever it was to MESSAGE.
-// if the state before the swap was DISCONNECTED the SendError is returned and nothing else is done.
-// The SendError now owns the heap channel memory and is responsible for dropping the message
-// and freeing the memory.
-// If the state was RECEIVING the sender reads the waker object from the channel heap memory and
-// call the unpark method, which will wake up the receiver.
-//
-// Receiving on the channel first checks the state. If it is MESSAGE the message object is read
-// from the heap back into the stack, the heap memory is freed and the message returned. If the
-// state is DISCONNECTED the heap memory is freed and an error is returned. And if the state is
-// EMPTY and the receive operation is a blocking one it creates a waker object and writes it to
-// the channel on the heap and does an atomic compare_and_swap on the state from EMPTY to RECEIVING.
-// If the swap went fine, it either parks the thread or returns Poll::Pending, depending on if
-// the receive is a blocking or an async one. It now just waits for the sender to wake it up.
-//
+// be consumed or dropped signal via the state that it is gone. And the second one see this and
+// frees the memory.
 //
 // ## Footnotes
 //
@@ -255,13 +236,14 @@ impl<T> Sender<T> {
     /// Returns an error if the receiver has already been dropped. The message can
     /// be extracted from the error.
     ///
-    /// This method is completely lock-free and wait-free when sending on a channel that the
+    /// This method is lock-free and wait-free when sending on a channel that the
     /// receiver is currently not receiving on. If the receiver is receiving during the send
-    /// operation this method includes waking up the thread/task. Unparking a thread currently
-    /// involves a mutex in Rust's standard library. How lock-free waking up an async task is
+    /// operation this method includes waking up the thread/task. Unparking a thread involves
+    /// a mutex in Rust's standard library at the time of writing this.
+    /// How lock-free waking up an async task is
     /// depends on your executor. If this method returns a `SendError`, please mind that dropping
-    /// the error involves running any drop implementation on the message type, which might or
-    /// might not be lock-free.
+    /// the error involves running any drop implementation on the message type, and freeing the
+    /// channel's heap allocation, which might or might not be lock-free.
     pub fn send(self, message: T) -> Result<(), SendError<T>> {
         let channel_ptr = self.channel_ptr;
 
@@ -571,7 +553,7 @@ impl<T> Receiver<T> {
             }
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
-            RECEIVING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
+            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -830,7 +812,7 @@ impl<T> Receiver<T> {
             DISCONNECTED => Err(disconnected_error),
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
-            RECEIVING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
+            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }

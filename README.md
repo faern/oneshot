@@ -1,60 +1,78 @@
 # oneshot
 
-Oneshot spsc channel. The sender's send method is non-blocking, lock- and wait-free[1].
+Oneshot spsc (single producer, single consumer) channel. Meaning each channel instance
+can only transport a single message. This has a few nice outcomes. One thing is that
+the implementation can be very efficient, utilizing the knowledge that there will
+only be one message. But more importantly, it allows the API to be expressed in such
+a way that certain edge cases that you don't want to care about when only sending a
+single message on a channel does not exist. For example: The sender can't be copied
+or cloned, and the send method takes ownership and consumes the sender.
+So you are guaranteed, at the type level, that there can only be one message sent.
+
+The sender's send method is non-blocking, and potentially lock- and wait-free.
+See documentation on [Sender::send] for situations where it might not be fully wait-free.
 The receiver supports both lock- and wait-free `try_recv` as well as indefinite and time
 limited thread blocking receive operations. The receiver also implements `Future` and
 supports asynchronously awaiting the message.
 
-This is a oneshot channel implementation. Meaning each channel instance can only transport
-a single message. This has a few nice outcomes. One thing is that the implementation can
-be very efficient, utilizing the knowledge that there will only be one message. But more
-importantly, it allows the API to be expressed in such a way that certain edge cases
-that you don't want to care about when only sending a single message on a channel does not
-exist. For example. The sender can't be copied or cloned and the send method takes ownership
-and consumes the sender. So you are guaranteed, at the type level, that there can only be
-one message sent.
 
 ## Examples
 
-A very basic example to just show the API:
+This example sets up a background worker that processes requests coming in on a standard
+mpsc channel and replies on a oneshot channel provided with each request. The worker can
+be interacted with both from sync and async contexts since the oneshot receiver
+can receive both blocking and async.
 
 ```rust
-let (sender, receiver) = oneshot::channel();
-thread::spawn(move || {
-    sender.send("Hello from worker thread!");
-});
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
-let message = receiver.recv().expect("Worker thread does not want to talk :(");
-println!("A message from a different thread: {}", message);
-```
+type Request = String;
 
-A slightly larger example showing communicating back work of *different types* during a
-long computation. The final result here could have been communicated back via the thread's
-`JoinHandle`. But those can't be waited on with a timeout. This is a quite artificial example,
-that mostly shows the API.
+// Starts a background thread performing some computation on requests sent to it.
+// Delivers the response back over a oneshot channel.
+fn spawn_processing_thread() -> mpsc::Sender<(Request, oneshot::Sender<usize>)> {
+    let (request_sender, request_receiver) = mpsc::channel::<(Request, oneshot::Sender<usize>)>();
+    thread::spawn(move || {
+        for (request_data, response_sender) in request_receiver.iter() {
+            let compute_operation = || request_data.len();
+            let _ = response_sender.send(compute_operation()); // <- Send on the oneshot channel
+        }
+    });
+    request_sender
+}
 
-```rust
-let (sender1, receiver1) = oneshot::channel();
-let (sender2, receiver2) = oneshot::channel();
+let processor = spawn_processing_thread();
 
-let thread = thread::spawn(move || {
-    let data_processor = expensive_initialization();
-    sender1.send(data_processor.summary()).expect("Main thread not waiting");
-    sender2.send(data_processor.expensive_computation()).expect("Main thread not waiting");
-});
+// If compiled with `std` the library can receive messages with timeout on regular threads
+#[cfg(feature = "std")] {
+    let (response_sender, response_receiver) = oneshot::channel();
+    let request = Request::from("data from sync thread");
 
-let summary = receiver1.recv().expect("Worker thread died");
-println!("Initialized data. Will crunch these numbers: {}", summary);
-
-let result = loop {
-    match receiver2.recv_timeout(Duration::from_secs(1)) {
-        Ok(result) => break result,
-        Err(oneshot::RecvTimeoutError::Timeout) => println!("Still working..."),
-        Err(oneshot::RecvTimeoutError::Disconnected) => panic!("Worker thread died"),
+    processor.send((request, response_sender)).expect("Processor down");
+    match response_receiver.recv_timeout(Duration::from_secs(1)) { // <- Receive on the oneshot channel
+        Ok(result) => println!("Processor returned {}", result),
+        Err(oneshot::RecvTimeoutError::Timeout) => eprintln!("Processor was too slow"),
+        Err(oneshot::RecvTimeoutError::Disconnected) => panic!("Processor exited"),
     }
-};
-println!("Done computing. Results: {:?}", result);
-thread.join().expect("Worker thread panicked");
+}
+
+// If compiled with the `async` feature, the `Receiver` can be awaited in an async context
+#[cfg(feature = "async")] {
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            let (response_sender, response_receiver) = oneshot::channel();
+            let request = Request::from("data from sync thread");
+
+            processor.send((request, response_sender)).expect("Processor down");
+            match response_receiver.await { // <- Receive on the oneshot channel asynchronously
+                Ok(result) => println!("Processor returned {}", result),
+                Err(_e) => panic!("Processor exited"),
+            }
+        });
+}
 ```
 
 ## Sync vs async
@@ -64,7 +82,7 @@ implementations allowing you to seamlessly send messages between a normal thread
 task, or the other way around. If message passing is the way you are communicating, of course
 that should work smoothly between the sync and async parts of the program!
 
-This library achieves that by having an almost[1] wait-free send operation that can safely
+This library achieves that by having a fast and cheap send operation that can
 be used in both sync threads and async tasks. The receiver has both thread blocking
 receive methods for synchronous usage, and implements `Future` for asynchronous usage.
 
@@ -72,58 +90,5 @@ The receiving endpoint of this channel implements Rust's `Future` trait and can 
 in an asynchronous task. This implementation is completely executor/runtime agnostic. It should
 be possible to use this library with any executor.
 
-## Footnotes
 
-[1]: See documentation on [Sender::send] for situations where it might not be fully wait-free.
-
-## Implementation correctness
-
-This library uses a lot of unsafe Rust in order to be fast and efficient. I am of the opinion
-that Rust code should avoid unsafe, except for low level primitives where the performance
-gains can be large and therefore justified. Or FFI where unsafe Rust is needed. I classify
-this as a low level primitive.
-
-The test suite and CI for this project uses various ways to try to find potential bugs. First of
-all, the tests are executed under valgrind in order to try and detect invalid allocations.
-Secondly the tests are ran an extra time with some sleeps injected in the code in order to
-try and trigger different execution paths. Lastly, most tests are also executed a third time
-with [loom]. Loom is a tool for testing concurrent Rust code, trying all possible
-thread sheduling outcomes. It also tracks every memory allocation and free in order to detect
-invalid usage, kind of like valgrind.
-
-[loom]: https://crates.io/crates/loom
-
-## My message passing frustrations and dreams
-
-Message passing is a very common and good way of synchronization in a concurrent program. But
-using it in Rust is far from smooth at the moment. Let me explain my ideal message passing
-library before coming to the problems:
-
-* Have dedicated channel primitives for all the common channel types:
-  * Oneshot spsc (this is what this crate implements)
-  * Rendezvous spsc and mpmc
-  * Bounded mpmc
-  * Unbounded mpmc
-  * Broadcast mpmc (every consumer see every message)
-* All the send and receive methods that can't be completed in a lock-free manner should have both
-  thread blocking and async versions of themselves. The async version should be executor agnostic,
-  not depend on any one executor and work on all of them.
-* All channels should seamlessly and ergonomically allow sending messages between two threads,
-  between two async tasks and in both directions between a thread and task.
-* Be a dedicated message passing crate with as few dependencies as possible. Many of the current
-  channel types are embedded in larger crates or async runtime crates, making the barrier for
-  depending on them larger.
-
-Where it makes sense from an API or implementation standpoint, the mpmc channels could also come
-with dedicated mpsc and spmc versions. If it allows the API to more exactly express the type's
-functionality and/or if the implementation can be made noticeably more efficient.
-
-None of the existing channels that I have found satisfy all the above conditions. The main
-thing that is missing is seamless interoperability between the sync and async worlds. All channels
-bundled up with async runtimes (`tokio`, `async-std` and `futures`) does not allow thread blocking
-send or receive calls. And the standard library and for example
-`crossbeam-channel` does not implement `Future` at all, so no async support.
-
-# Licence
-
-MIT OR Apache-2.0
+License: MIT OR Apache-2.0
