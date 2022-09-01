@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+
+## [0.1.5] - 2022-09-01
+### Fixed
+- Handle the UNPARKING state correctly in all recv methods. `try_recv` will now not panic
+  if used on a `Receiver` that is being unparked from an async wait. The other `recv` methods
+  will still panic (as they should), but with a better error message.
+
+
+## [0.1.4] - 2022-08-30
 ### Changed
 - Upgrade to Rust edition 2021. Also increases the MSRV to Rust 1.60.
 - Add null-pointer optimization to `Sender`, `Receiver` and `SendError`.
