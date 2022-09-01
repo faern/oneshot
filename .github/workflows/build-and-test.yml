@@ -39,4 +39,4 @@ jobs:
         run: RUSTFLAGS+="--cfg oneshot_test_delay" cargo hack --feature-powerset test
 
       - name: Test with loom
-        run: RUSTFLAGS+="--cfg loom" LOOM_MAX_BRANCHES=100000 cargo hack --feature-powerset test
+        run: RUSTFLAGS+="--cfg loom" LOOM_MAX_BRANCHES=100000 cargo hack --feature-powerset test --test sync --test loom
