@@ -1178,7 +1178,7 @@ fn receiver_waker_size() {
         (false, false) => 0,
         (false, true) => 16,
         (true, false) => 8,
-        (true, true) => 24,
+        (true, true) => 16,
     };
     assert_eq!(mem::size_of::<ReceiverWaker>(), expected);
 }
