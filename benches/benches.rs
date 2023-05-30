@@ -34,6 +34,11 @@ macro_rules! bench_send_and_recv {
             $(send_and_recv_ref::<$size>(&mut group);)+
             group.finish();
         }
+        {
+            let mut group = $c.benchmark_group("recv");
+            $(recv::<$size>(&mut group);)+
+            group.finish();
+        }
     };
 }
 
@@ -93,6 +98,21 @@ fn send_and_recv_ref<const N: usize>(group: &mut BenchmarkGroup<WallTime>) {
                 sender.send(black_box([0b10101010u8; N])).unwrap();
                 receiver.recv_ref().unwrap()
             },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+fn recv<const N: usize>(group: &mut BenchmarkGroup<WallTime>) {
+    group.throughput(Throughput::Bytes(N as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(N), &N, |b, _| {
+        b.iter_batched(
+            || {
+                let (sender, receiver) = oneshot::channel::<[u8; N]>();
+                sender.send(black_box([0b10101010u8; N])).unwrap();
+                receiver
+            },
+            |receiver| receiver.recv().unwrap(),
             BatchSize::SmallInput,
         );
     });
