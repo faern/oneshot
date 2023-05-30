@@ -27,7 +27,7 @@ async = []
 loom = { version = "0.5.3", features = ["futures"] }
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [target.'cfg(not(loom))'.dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
