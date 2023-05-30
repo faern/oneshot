@@ -1,74 +1,112 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkGroup, BenchmarkId, Throughput, BatchSize};
 use std::mem;
 use std::time::{Duration, Instant};
+use criterion::measurement::WallTime;
 
 criterion_group!(benches, bench);
 criterion_main!(benches);
 
 macro_rules! bench_send_and_recv {
-    ($c:expr, $($type:ty => $value:expr);+) => {
+    ($c:expr; $($size:expr),+ $(,)?) => {
         // Sanity check that all $values are of $type.
-        $(let _: $type = $value;)*
         {
             let mut group = $c.benchmark_group("create_channel");
-            $(group.bench_function(stringify!($type), |b| {
-                b.iter(oneshot::channel::<$type>)
-            });)*
+            $(create::<$size>(&mut group);)+
             group.finish();
         }
         {
-            let mut group = $c.benchmark_group("create_and_send");
-            $(group.bench_function(stringify!($type), |b| {
-                b.iter(|| {
-                    let (sender, _receiver) = oneshot::channel();
-                    sender.send(black_box($value)).unwrap()
-                });
-            });)*
+            let mut group = $c.benchmark_group("send");
+            $(send::<$size>(&mut group);)+
             group.finish();
         }
         {
-            let mut group = $c.benchmark_group("create_and_send_on_closed");
-            $(group.bench_function(stringify!($type), |b| {
-                b.iter(|| {
-                    let (sender, _) = oneshot::channel();
-                    sender.send(black_box($value)).unwrap_err()
-                });
-            });)*
+            let mut group = $c.benchmark_group("send_on_closed");
+            $(send_on_closed::<$size>(&mut group);)+
             group.finish();
         }
         {
-            let mut group = $c.benchmark_group("create_send_and_recv");
-            $(group.bench_function(stringify!($type), |b| {
-                b.iter(|| {
-                    let (sender, receiver) = oneshot::channel();
-                    sender.send(black_box($value)).unwrap();
-                    receiver.recv().unwrap()
-                });
-            });)*
+            let mut group = $c.benchmark_group("send_and_recv");
+            $(send_and_recv::<$size>(&mut group);)+
             group.finish();
         }
         {
-            let mut group = $c.benchmark_group("create_send_and_recv_ref");
-            $(group.bench_function(stringify!($type), |b| {
-                b.iter(|| {
-                    let (sender, receiver) = oneshot::channel();
-                    sender.send(black_box($value)).unwrap();
-                    receiver.recv_ref().unwrap()
-                });
-            });)*
+            let mut group = $c.benchmark_group("send_and_recv_ref");
+            $(send_and_recv_ref::<$size>(&mut group);)+
             group.finish();
         }
     };
 }
 
+fn create<const N: usize>(group: &mut BenchmarkGroup<WallTime>) {
+    group.bench_with_input(BenchmarkId::from_parameter(N), &N, |b, _| {
+        b.iter(oneshot::channel::<[u8; N]>);
+    });
+}
+
+fn send<const N: usize>(group: &mut BenchmarkGroup<WallTime>) {
+    group.throughput(Throughput::Bytes(N as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(N), &N, |b, _| {
+        b.iter_batched(
+            || oneshot::channel::<[u8; N]>(),
+            |(sender, _receiver)| {
+                sender.send(black_box([0b10101010u8; N])).unwrap()
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+fn send_on_closed<const N: usize>(group: &mut BenchmarkGroup<WallTime>) {
+    group.throughput(Throughput::Bytes(N as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(N), &N, |b, _| {
+        b.iter_batched(
+            || oneshot::channel::<[u8; N]>(),
+            |(sender, receiver)| {
+                drop(receiver);
+                sender.send(black_box([0b10101010u8; N])).unwrap_err()
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+fn send_and_recv<const N: usize>(group: &mut BenchmarkGroup<WallTime>) {
+    group.throughput(Throughput::Bytes(N as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(N), &N, |b, _| {
+        b.iter_batched(
+            || oneshot::channel::<[u8; N]>(),
+            |(sender, receiver)| {
+                sender.send(black_box([0b10101010u8; N])).unwrap();
+                receiver.recv().unwrap()
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+fn send_and_recv_ref<const N: usize>(group: &mut BenchmarkGroup<WallTime>) {
+    group.throughput(Throughput::Bytes(N as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(N), &N, |b, _| {
+        b.iter_batched(
+            || oneshot::channel::<[u8; N]>(),
+            |(sender, receiver)| {
+                sender.send(black_box([0b10101010u8; N])).unwrap();
+                receiver.recv_ref().unwrap()
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 fn bench(c: &mut Criterion) {
-    bench_send_and_recv!(c,
-        () => ();
-        u8 => 7u8;
-        usize => 9876usize;
-        u128 => 1234567u128;
-        [u8; 64] => [0b10101010u8; 64];
-        [u8; 4096] => [0b10101010u8; 4096]
+    bench_send_and_recv!(c;
+        0,
+        1,
+        8,
+        16,
+        64,
+        1024,
+        4096,
     );
 
     bench_try_recv(c);
