@@ -17,7 +17,10 @@ edition = "2021"
 rust-version = "1.60.0"
 
 [features]
+# TODO: Remove the default features on next breaking release and make them opt-in.
+# Because default features are evil
 default = ["std", "async"]
+
 # Enables usage of libstd. Adds support for thread blocking receive methods.
 std = []
 # Enables async receiving by implementing Future
