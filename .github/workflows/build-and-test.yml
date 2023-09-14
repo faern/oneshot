@@ -13,9 +13,7 @@ jobs:
           - os: ubuntu-latest
             rust: nightly
           - os: ubuntu-latest
-            # MSRV. Not considered breaking when this has to be bumped.
-            # But should be mentioned in the changelog.
-            rust: 1.60.0
+            rust: 1.65.0
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
