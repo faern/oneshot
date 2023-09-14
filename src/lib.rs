@@ -330,9 +330,9 @@ impl<T> Sender<T> {
     ///
     /// # Safety
     ///
-    /// This pointer must have come from [Sender::into_raw]. At most one Sender must exist for a
-    /// channel at any point in time. Constructing multiple Senders from the same raw pointer leads
-    /// to undefined behavior.
+    /// This pointer must have come from [`Sender<T>::into_raw`] with the same message type, `T`.
+    /// At most one Sender must exist for a channel at any point in time.
+    /// Constructing multiple Senders from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
         Self {
             channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
@@ -857,9 +857,9 @@ impl<T> Receiver<T> {
     ///
     /// # Safety
     ///
-    /// This pointer must have come from [Receiver::into_raw]. At most one Receiver must exist for
-    /// a channel at any point in time. Constructing multiple Receiver from the same raw pointer
-    /// leads to undefined behavior.
+    /// This pointer must have come from [`Receiver<T>::into_raw`] with the same message type, `T`.
+    /// At most one Receiver must exist for a channel at any point in time.
+    /// Constructing multiple Receivers from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
         Self {
             channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
