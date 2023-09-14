@@ -1,12 +1,12 @@
 [package]
 name = "oneshot"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Linus Färnstrand <faern@faern.net>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 description = """
-Oneshot spsc channel with (potentially) lock-free non-blocking send and a receiver supporting
+Oneshot spsc channel with (potentially) lock-free non-blocking send, and a receiver supporting
 both thread blocking receive operations as well as Future based async polling.
 """
 
