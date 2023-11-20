@@ -1,13 +1,14 @@
 [package]
-name = "oneshot"
+name = "oneshot-uniffi"
 version = "0.1.5"
 authors = ["Linus Färnstrand <faern@faern.net>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 description = """
-Oneshot spsc channel with (potentially) lock-free non-blocking send and a receiver supporting
-both thread blocking receive operations as well as Future based async polling.
+Patched version of oneshot specifically for the UniFFI project.
+
+This removes the `loom` target and dependency which helps with UniFFI's downstream consumers.
 """
 
 repository = "https://github.com/faern/oneshot"
@@ -26,13 +27,8 @@ std = []
 # Enables async receiving by implementing Future
 async = []
 
-[target.'cfg(loom)'.dependencies]
-loom = { version = "0.5.3", features = ["futures"] }
-
 [dev-dependencies]
 criterion = "0.3"
-
-[target.'cfg(not(loom))'.dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 async-std = { version = "1", features = ["attributes"] }
 
