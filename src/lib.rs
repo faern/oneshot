@@ -228,6 +228,8 @@ pub struct Receiver<T> {
 
 unsafe impl<T: Send> Send for Sender<T> {}
 unsafe impl<T: Send> Send for Receiver<T> {}
+unsafe impl<T: Sync> Sync for Sender<T> {}
+unsafe impl<T: Sync> Sync for Receiver<T> {}
 impl<T> Unpin for Receiver<T> {}
 
 impl<T> Sender<T> {
