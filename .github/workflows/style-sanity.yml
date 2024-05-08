@@ -20,9 +20,11 @@ jobs:
           override: true
 
       - name: Clippy check
+        env:
+          RUSTFLAGS: --deny warnings
         run: |
-          export RUSTFLAGS="--deny warnings"
-          time cargo clippy --verbose
+          time cargo clippy --locked --all-targets --no-default-features
+          time cargo clippy --locked --all-targets --all-features
 
   check-formatting:
     runs-on: ubuntu-latest
