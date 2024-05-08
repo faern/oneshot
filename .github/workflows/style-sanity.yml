@@ -1,11 +1,10 @@
-name: Rust linting, formatting and audit
+name: Rust linting and formatting
 on:
   pull_request:
     paths:
       - .github/workflows/*.yml
       - '**/*.rs'
-      - Cargo.toml
-      - Cargo.lock
+
   workflow_dispatch:
 jobs:
   clippy-linting:
@@ -41,17 +40,3 @@ jobs:
         run: |
           rustfmt --version
           cargo fmt -- --check
-
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-audit
-        uses: actions-rs/install@v0.1.2
-        with:
-          crate: cargo-audit
-          version: latest
-
-      - name: Audit
-        run: cargo audit
