@@ -1,4 +1,5 @@
 #![cfg(feature = "async")]
+#![allow(unexpected_cfgs)]
 
 use core::{future, mem, pin, task};
 
