@@ -1,5 +1,14 @@
+---
 name: Cargo build and test
-on: [pull_request, workflow_dispatch]
+on:
+  pull_request:
+    paths:
+      - .github/workflows/*.yml
+      - '**/*.rs'
+      - Cargo.toml
+      - Cargo.lock
+  workflow_dispatch:
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "--deny warnings "
@@ -14,15 +23,15 @@ jobs:
             rust: nightly
           - os: ubuntu-latest
             rust: 1.65.0
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: ATiltedTree/setup-rust@v1.0.4
+      - uses: actions-rs/toolchain@v1.0.6
         with:
-          rust-version: ${{ matrix.rust }}
+          toolchain: ${{ matrix.rust }}
+          default: true
 
       - name: Install cargo-hack
         uses: taiki-e/install-action@cargo-hack
