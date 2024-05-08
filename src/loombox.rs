@@ -15,6 +15,13 @@ impl<T> Box<T> {
 }
 
 impl<T: ?Sized> Box<T> {
+    pub fn leak<'a>(b: Self) -> &'a mut T
+    where
+        T: 'a,
+    {
+        unsafe { &mut *Box::into_raw(b) }
+    }
+
     #[inline]
     pub fn into_raw(b: Box<T>) -> *mut T {
         let ptr = b.ptr;
