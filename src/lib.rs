@@ -312,6 +312,25 @@ impl<T> Sender<T> {
         }
     }
 
+    /// Returns true if the associated Receiver handle has been dropped.
+    ///
+    /// If true is returned, a future call to send is guaranteed to return an error.
+    pub fn is_closed(&self) -> bool {
+        // SAFETY: Since we are holding a Sender's reference, we know that:
+        // - `send(..)` has not been called yet
+        // - `Sender` has not been dropped.
+        //
+        // This is sufficient to guarantee that the channel is still on the heap.
+        //
+        // Note that if the receiver disconnects it does not free the channel.
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
+        // ORDERING: We *chose* a Relaxed ordering here as it sufficient to
+        // enforce the method's contract: "if true is returned, a future
+        // call to send is guaranteed to return an error."
+        channel.state.load(Relaxed) == DISCONNECTED
+    }
+
     /// Consumes the Sender, returning a raw pointer to the channel on the heap.
     ///
     /// This is intended to simplify using oneshot channels with some FFI code. The only safe thing
