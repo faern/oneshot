@@ -111,6 +111,7 @@
 // [1]: Mind that the waker only takes zero bytes when all features are disabled, making it
 //      impossible to *wait* for the message. `try_recv` the only available method in this scenario.
 
+#![allow(unexpected_cfgs)]
 #![deny(rust_2018_idioms)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
