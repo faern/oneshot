@@ -150,10 +150,10 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "std")]
 mod thread {
     #[cfg(not(loom))]
-    pub use std::thread::{current, park, park_timeout, yield_now, Thread};
+    pub use std::thread::{current, park, park_timeout, Thread};
 
     #[cfg(loom)]
-    pub use loom::thread::{current, park, yield_now, Thread};
+    pub use loom::thread::{current, park, Thread};
 
     // loom does not support parking with a timeout. So we just
     // yield. This means that the "park" will "spuriously" wake up
