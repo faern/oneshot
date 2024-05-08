@@ -1,6 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::mem;
-use std::time::{Duration, Instant};
 
 criterion_group!(benches, bench);
 criterion_main!(benches);
@@ -36,6 +35,7 @@ macro_rules! bench_send_and_recv {
             });)*
             group.finish();
         }
+        #[cfg(feature = "std")]
         {
             let mut group = $c.benchmark_group("create_send_and_recv");
             $(group.bench_function(stringify!($type), |b| {
@@ -47,6 +47,7 @@ macro_rules! bench_send_and_recv {
             });)*
             group.finish();
         }
+        #[cfg(feature = "std")]
         {
             let mut group = $c.benchmark_group("create_send_and_recv_ref");
             $(group.bench_function(stringify!($type), |b| {
@@ -72,7 +73,9 @@ fn bench(c: &mut Criterion) {
     );
 
     bench_try_recv(c);
+    #[cfg(feature = "std")]
     bench_recv_deadline_now(c);
+    #[cfg(feature = "std")]
     bench_recv_timeout_zero(c);
 }
 
@@ -87,8 +90,9 @@ fn bench_try_recv(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "std")]
 fn bench_recv_deadline_now(c: &mut Criterion) {
-    let now = Instant::now();
+    let now = std::time::Instant::now();
     {
         let (_sender, receiver) = oneshot::channel::<u128>();
         c.bench_function("recv_deadline_now", |b| {
@@ -104,8 +108,9 @@ fn bench_recv_deadline_now(c: &mut Criterion) {
     }
 }
 
+#[cfg(feature = "std")]
 fn bench_recv_timeout_zero(c: &mut Criterion) {
-    let zero = Duration::from_nanos(0);
+    let zero = std::time::Duration::from_nanos(0);
     {
         let (_sender, receiver) = oneshot::channel::<u128>();
         c.bench_function("recv_timeout_zero", |b| {
