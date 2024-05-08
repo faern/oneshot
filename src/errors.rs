@@ -1,4 +1,4 @@
-use super::{dealloc, Channel};
+use super::{dealloc, Channel, DefaultWaker};
 use core::fmt;
 use core::mem;
 use core::ptr::NonNull;
@@ -8,21 +8,21 @@ use core::ptr::NonNull;
 /// has already been dropped.
 ///
 /// The message that could not be sent can be retreived again with [`SendError::into_inner`].
-pub struct SendError<T> {
-    channel_ptr: NonNull<Channel<T>>,
+pub struct SendError<T, W = DefaultWaker> {
+    channel_ptr: NonNull<Channel<T, W>>,
 }
 
-unsafe impl<T: Send> Send for SendError<T> {}
-unsafe impl<T: Sync> Sync for SendError<T> {}
+unsafe impl<T: Send, W> Send for SendError<T, W> {}
+unsafe impl<T: Sync, W> Sync for SendError<T, W> {}
 
-impl<T> SendError<T> {
+impl<T, W> SendError<T, W> {
     /// # Safety
     ///
     /// By calling this function, the caller semantically transfers ownership of the
     /// channel's resources to the created `SendError`. Thus the caller must ensure that the
     /// pointer is not used in a way which would violate this ownership transfer. Moreover,
     /// the caller must assert that the channel contains a valid, initialized message.
-    pub(crate) const unsafe fn new(channel_ptr: NonNull<Channel<T>>) -> Self {
+    pub(crate) const unsafe fn new(channel_ptr: NonNull<Channel<T, W>>) -> Self {
         Self { channel_ptr }
     }
 
@@ -35,7 +35,7 @@ impl<T> SendError<T> {
         mem::forget(self);
 
         // SAFETY: we have ownership of the channel
-        let channel: &Channel<T> = unsafe { channel_ptr.as_ref() };
+        let channel: &Channel<T, W> = unsafe { channel_ptr.as_ref() };
 
         // SAFETY: we know that the message is initialized according to the safety requirements of
         // `new`
@@ -54,7 +54,7 @@ impl<T> SendError<T> {
     }
 }
 
-impl<T> Drop for SendError<T> {
+impl<T, W> Drop for SendError<T, W> {
     fn drop(&mut self) {
         // SAFETY: we have ownership of the channel and require that the message is initialized
         // upon construction
@@ -65,20 +65,20 @@ impl<T> Drop for SendError<T> {
     }
 }
 
-impl<T> fmt::Display for SendError<T> {
+impl<T, W> fmt::Display for SendError<T, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "sending on a closed channel".fmt(f)
     }
 }
 
-impl<T> fmt::Debug for SendError<T> {
+impl<T, W> fmt::Debug for SendError<T, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SendError<{}>(_)", stringify!(T))
     }
 }
 
 #[cfg(feature = "std")]
-impl<T> std::error::Error for SendError<T> {}
+impl<T, W> std::error::Error for SendError<T, W> {}
 
 /// An error returned from the blocking [`Receiver::recv`](crate::Receiver::recv) method.
 ///

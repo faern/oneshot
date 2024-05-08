@@ -151,10 +151,10 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "std")]
 mod thread {
     #[cfg(not(loom))]
-    pub use std::thread::{current, park, park_timeout, Thread};
+    pub use std::thread::{park, park_timeout};
 
     #[cfg(loom)]
-    pub use loom::thread::{current, park, Thread};
+    pub use loom::thread::park;
 
     // loom does not support parking with a timeout. So we just
     // yield. This means that the "park" will "spuriously" wake up
@@ -179,6 +179,13 @@ mod errors;
 mod waker;
 
 pub use errors::{RecvError, RecvTimeoutError, SendError, TryRecvError};
+pub use waker::{DefaultWaker, SyncWaker, Waker};
+
+#[cfg(feature = "async")]
+pub use waker::AsyncWaker;
+
+#[cfg(all(feature = "std", feature = "async"))]
+pub use waker::GenericWaker;
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -201,8 +208,11 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 }
 
 #[derive(Debug)]
-pub struct Sender<T> {
-    channel_ptr: NonNull<Channel<T>>,
+pub struct Sender<T, W = DefaultWaker>
+where
+    W: Waker,
+{
+    channel_ptr: NonNull<Channel<T, W>>,
     // In reality we want contravariance, however we can't obtain that.
     //
     // Consider the following scenario:
@@ -223,17 +233,23 @@ pub struct Sender<T> {
 }
 
 #[derive(Debug)]
-pub struct Receiver<T> {
+pub struct Receiver<T, W = DefaultWaker>
+where
+    W: Waker,
+{
     // Covariance is the right choice here. Consider the example presented in Sender, and you'll
     // see that if we replaced `rx` instead then we would get the expected behavior
-    channel_ptr: NonNull<Channel<T>>,
+    channel_ptr: NonNull<Channel<T, W>>,
 }
 
-unsafe impl<T: Send> Send for Sender<T> {}
-unsafe impl<T: Send> Send for Receiver<T> {}
-impl<T> Unpin for Receiver<T> {}
+unsafe impl<T: Send, W> Send for Sender<T, W> where W: Waker {}
+unsafe impl<T: Send, W> Send for Receiver<T, W> where W: Waker {}
+impl<T, W> Unpin for Receiver<T, W> where W: Waker {}
 
-impl<T> Sender<T> {
+impl<T, W> Sender<T, W>
+where
+    W: Waker,
+{
     /// Sends `message` over the channel to the corresponding [`Receiver`].
     ///
     /// Returns an error if the receiver has already been dropped. The message can
@@ -247,7 +263,7 @@ impl<T> Sender<T> {
     /// depends on your executor. If this method returns a `SendError`, please mind that dropping
     /// the error involves running any drop implementation on the message type, and freeing the
     /// channel's heap allocation, which might or might not be lock-free.
-    pub fn send(self, message: T) -> Result<(), SendError<T>> {
+    pub fn send(self, message: T) -> Result<(), SendError<T, W>> {
         let channel_ptr = self.channel_ptr;
 
         // Don't run our Drop implementation if send was called, any cleanup now happens here
@@ -304,7 +320,7 @@ impl<T> Sender<T> {
                 // that allocation, and freeing the channel does not drop the waker since the
                 // waker is wrapped in MaybeUninit. Therefore this data is valid regardless of
                 // whether or not the receive has completed by this point.
-                waker.unpark();
+                waker.wake();
 
                 Ok(())
             }
@@ -338,13 +354,16 @@ impl<T> Sender<T> {
     /// Constructing multiple Senders from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
         Self {
-            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
+            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T, W>),
             _invariant: PhantomData,
         }
     }
 }
 
-impl<T> Drop for Sender<T> {
+impl<T, W> Drop for Sender<T, W>
+where
+    W: Waker,
+{
     fn drop(&mut self) {
         // SAFETY: The receiver only ever frees the channel if we are in the MESSAGE or
         // DISCONNECTED states. If we are in the MESSAGE state, then we called
@@ -380,7 +399,7 @@ impl<T> Drop for Sender<T> {
 
                 // The Acquire ordering above ensures that the write of the DISCONNECTED state
                 // happens-before unparking the receiver.
-                waker.unpark();
+                waker.wake();
             }
             // The receiver was already dropped. We are responsible for freeing the channel.
             DISCONNECTED => {
@@ -395,7 +414,10 @@ impl<T> Drop for Sender<T> {
     }
 }
 
-impl<T> Receiver<T> {
+impl<T, W> Receiver<T, W>
+where
+    W: Waker,
+{
     /// Checks if there is a message in the channel without blocking. Returns:
     ///  * `Ok(message)` if there was a message in the channel.
     ///  * `Err(Empty)` if the [`Sender`] is alive, but has not yet sent a message.
@@ -433,6 +455,41 @@ impl<T> Receiver<T> {
         }
     }
 
+    /// Begins the process of receiving on the channel by reference. If the message is already
+    /// ready, or the sender has disconnected, then this function will return the appropriate
+    /// Result immediately. Otherwise, it will write the waker to memory, check to see if the
+    /// sender has finished or disconnected again, and then will call `finish`. `finish` is
+    /// thus responsible for cleaning up the channel's resources appropriately before it returns,
+
+    /// Consumes the Receiver, returning a raw pointer to the channel on the heap.
+    ///
+    /// This is intended to simplify using oneshot channels with some FFI code. The only safe thing
+    /// to do with the returned pointer is to later reconstruct the Receiver with
+    /// [Receiver::from_raw]. Memory will leak if the Receiver is never reconstructed.
+    pub fn into_raw(self) -> *mut () {
+        let raw = self.channel_ptr.as_ptr() as *mut ();
+        mem::forget(self);
+        raw
+    }
+
+    /// Consumes a raw pointer from [Receiver::into_raw], recreating the Receiver.
+    ///
+    /// # Safety
+    ///
+    /// This pointer must have come from [`Receiver<T>::into_raw`] with the same message type, `T`.
+    /// At most one Receiver must exist for a channel at any point in time.
+    /// Constructing multiple Receivers from the same raw pointer leads to undefined behavior.
+    pub unsafe fn from_raw(raw: *mut ()) -> Self {
+        Self {
+            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T, W>),
+        }
+    }
+}
+
+impl<T, W> Receiver<T, W>
+where
+    W: SyncWaker,
+{
     /// Attempts to wait for a message from the [`Sender`], returning an error if the channel is
     /// disconnected.
     ///
@@ -482,7 +539,7 @@ impl<T> Receiver<T> {
                 // Write our waker instance to the channel.
                 // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
                 // try to access the waker until it sees the state set to RECEIVING below
-                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
+                unsafe { channel.write_waker(W::new()) };
 
                 // Switch the state to RECEIVING. We need to do this in one atomic step in case the
                 // sender disconnected or sent the message while we wrote the waker to memory. We
@@ -624,6 +681,89 @@ impl<T> Receiver<T> {
         })
     }
 
+    /// such as destroying the waker, for instance.
+    #[cfg(feature = "std")]
+    #[inline]
+    fn start_recv_ref<E>(
+        &self,
+        disconnected_error: E,
+        finish: impl FnOnce(&Channel<T, W>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
+        // is still alive, meaning that even if the sender was dropped then it would have observed
+        // the fact that we're still alive and left the responsibility of deallocating the
+        // channel to us, so `self.channel` is valid
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
+        // ORDERING: synchronize with the write of the message
+        match channel.state.load(Acquire) {
+            // The sender is alive but has not sent anything yet. We prepare to park.
+            EMPTY => {
+                // Conditionally add a delay here to help the tests trigger the edge cases where
+                // the sender manages to be dropped or send something before we are able to store
+                // our waker object in the channel.
+                #[cfg(oneshot_test_delay)]
+                std::thread::sleep(std::time::Duration::from_millis(10));
+
+                // Write our waker instance to the channel.
+                // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
+                // try to access the waker until it sees the state set to RECEIVING below
+                unsafe { channel.write_waker(W::new()) };
+
+                // ORDERING: we use release ordering on success so the sender can synchronize with
+                // our write of the waker. We use relaxed ordering on failure since the sender does
+                // not need to synchronize with our write and the individual match arms handle any
+                // additional synchronization
+                match channel
+                    .state
+                    .compare_exchange(EMPTY, RECEIVING, Release, Relaxed)
+                {
+                    // We stored our waker, now we delegate to the callback to finish the receive
+                    // operation
+                    Ok(_) => finish(channel),
+                    // The sender sent the message while we prepared to finish
+                    Err(MESSAGE) => {
+                        // See comments in `recv` for ordering and safety
+
+                        fence(Acquire);
+
+                        unsafe { channel.drop_waker() };
+
+                        // ORDERING: the sender has been `mem::forget`-ed so this update only
+                        // needs to be visible to us
+                        channel.state.store(DISCONNECTED, Relaxed);
+
+                        // SAFETY: The MESSAGE state tells us there is a correctly initialized
+                        // message
+                        Ok(unsafe { channel.take_message() })
+                    }
+                    // The sender was dropped before sending anything while we prepared to park.
+                    Err(DISCONNECTED) => {
+                        // See comments in `recv` for safety
+                        unsafe { channel.drop_waker() };
+                        Err(disconnected_error)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            // The sender sent the message. We take the message and mark the channel disconnected.
+            MESSAGE => {
+                // ORDERING: the sender has been `mem::forget`-ed so this update only needs to be
+                // visible to us
+                channel.state.store(DISCONNECTED, Relaxed);
+
+                // SAFETY: we are in the message state so the message is valid
+                Ok(unsafe { channel.take_message() })
+            }
+            // The sender was dropped before sending anything, or we already received the message.
+            DISCONNECTED => Err(disconnected_error),
+            // The receiver must have been `Future::poll`ed prior to this call.
+            #[cfg(feature = "async")]
+            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
+            _ => unreachable!(),
+        }
+    }
+
     /// Like [`Receiver::recv`], but will not block longer than `timeout`. Returns:
     ///  * `Ok(message)` if there was a message in the channel before the timeout was reached.
     ///  * `Err(Timeout)` if no message arrived on the channel before the timeout was reached.
@@ -666,7 +806,7 @@ impl<T> Receiver<T> {
         /// If the sender is unparking us after a message send, the message must already have been
         /// written to the channel and an acquire memory barrier issued before calling this function
         #[cold]
-        unsafe fn wait_for_unpark<T>(channel: &Channel<T>) -> Result<T, RecvTimeoutError> {
+        unsafe fn wait_for_unpark<T, W>(channel: &Channel<T, W>) -> Result<T, RecvTimeoutError> {
             loop {
                 thread::park();
 
@@ -756,122 +896,13 @@ impl<T> Receiver<T> {
             }
         })
     }
-
-    /// Begins the process of receiving on the channel by reference. If the message is already
-    /// ready, or the sender has disconnected, then this function will return the appropriate
-    /// Result immediately. Otherwise, it will write the waker to memory, check to see if the
-    /// sender has finished or disconnected again, and then will call `finish`. `finish` is
-    /// thus responsible for cleaning up the channel's resources appropriately before it returns,
-    /// such as destroying the waker, for instance.
-    #[cfg(feature = "std")]
-    #[inline]
-    fn start_recv_ref<E>(
-        &self,
-        disconnected_error: E,
-        finish: impl FnOnce(&Channel<T>) -> Result<T, E>,
-    ) -> Result<T, E> {
-        // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
-        // is still alive, meaning that even if the sender was dropped then it would have observed
-        // the fact that we're still alive and left the responsibility of deallocating the
-        // channel to us, so `self.channel` is valid
-        let channel = unsafe { self.channel_ptr.as_ref() };
-
-        // ORDERING: synchronize with the write of the message
-        match channel.state.load(Acquire) {
-            // The sender is alive but has not sent anything yet. We prepare to park.
-            EMPTY => {
-                // Conditionally add a delay here to help the tests trigger the edge cases where
-                // the sender manages to be dropped or send something before we are able to store
-                // our waker object in the channel.
-                #[cfg(oneshot_test_delay)]
-                std::thread::sleep(std::time::Duration::from_millis(10));
-
-                // Write our waker instance to the channel.
-                // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
-                // try to access the waker until it sees the state set to RECEIVING below
-                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
-
-                // ORDERING: we use release ordering on success so the sender can synchronize with
-                // our write of the waker. We use relaxed ordering on failure since the sender does
-                // not need to synchronize with our write and the individual match arms handle any
-                // additional synchronization
-                match channel
-                    .state
-                    .compare_exchange(EMPTY, RECEIVING, Release, Relaxed)
-                {
-                    // We stored our waker, now we delegate to the callback to finish the receive
-                    // operation
-                    Ok(_) => finish(channel),
-                    // The sender sent the message while we prepared to finish
-                    Err(MESSAGE) => {
-                        // See comments in `recv` for ordering and safety
-
-                        fence(Acquire);
-
-                        unsafe { channel.drop_waker() };
-
-                        // ORDERING: the sender has been `mem::forget`-ed so this update only
-                        // needs to be visible to us
-                        channel.state.store(DISCONNECTED, Relaxed);
-
-                        // SAFETY: The MESSAGE state tells us there is a correctly initialized
-                        // message
-                        Ok(unsafe { channel.take_message() })
-                    }
-                    // The sender was dropped before sending anything while we prepared to park.
-                    Err(DISCONNECTED) => {
-                        // See comments in `recv` for safety
-                        unsafe { channel.drop_waker() };
-                        Err(disconnected_error)
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            // The sender sent the message. We take the message and mark the channel disconnected.
-            MESSAGE => {
-                // ORDERING: the sender has been `mem::forget`-ed so this update only needs to be
-                // visible to us
-                channel.state.store(DISCONNECTED, Relaxed);
-
-                // SAFETY: we are in the message state so the message is valid
-                Ok(unsafe { channel.take_message() })
-            }
-            // The sender was dropped before sending anything, or we already received the message.
-            DISCONNECTED => Err(disconnected_error),
-            // The receiver must have been `Future::poll`ed prior to this call.
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
-            _ => unreachable!(),
-        }
-    }
-
-    /// Consumes the Receiver, returning a raw pointer to the channel on the heap.
-    ///
-    /// This is intended to simplify using oneshot channels with some FFI code. The only safe thing
-    /// to do with the returned pointer is to later reconstruct the Receiver with
-    /// [Receiver::from_raw]. Memory will leak if the Receiver is never reconstructed.
-    pub fn into_raw(self) -> *mut () {
-        let raw = self.channel_ptr.as_ptr() as *mut ();
-        mem::forget(self);
-        raw
-    }
-
-    /// Consumes a raw pointer from [Receiver::into_raw], recreating the Receiver.
-    ///
-    /// # Safety
-    ///
-    /// This pointer must have come from [`Receiver<T>::into_raw`] with the same message type, `T`.
-    /// At most one Receiver must exist for a channel at any point in time.
-    /// Constructing multiple Receivers from the same raw pointer leads to undefined behavior.
-    pub unsafe fn from_raw(raw: *mut ()) -> Self {
-        Self {
-            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
-        }
-    }
 }
 
 #[cfg(feature = "async")]
-impl<T> core::future::Future for Receiver<T> {
+impl<T, W> core::future::Future for Receiver<T, W>
+where
+    W: AsyncWaker,
+{
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
@@ -964,7 +995,10 @@ impl<T> core::future::Future for Receiver<T> {
     }
 }
 
-impl<T> Drop for Receiver<T> {
+impl<T, W> Drop for Receiver<T, W>
+where
+    W: Waker,
+{
     fn drop(&mut self) {
         // SAFETY: since the receiving side is still alive the sender would have observed that and
         // left deallocating the channel allocation to us.
@@ -1026,13 +1060,13 @@ use states::*;
 /// * The message in the channel. This memory is uninitialized until the message is sent.
 /// * The waker instance for the thread or task that is currently receiving on this channel.
 ///   This memory is uninitialized until the receiver starts receiving.
-struct Channel<T> {
+struct Channel<T, W> {
     state: AtomicU8,
     message: UnsafeCell<MaybeUninit<T>>,
-    waker: UnsafeCell<MaybeUninit<ReceiverWaker>>,
+    waker: UnsafeCell<MaybeUninit<W>>,
 }
 
-impl<T> Channel<T> {
+impl<T, W> Channel<T, W> {
     pub fn new() -> Self {
         Self {
             state: AtomicU8::new(EMPTY),
@@ -1074,7 +1108,7 @@ impl<T> Channel<T> {
     #[cfg(any(feature = "std", feature = "async"))]
     unsafe fn with_waker_mut<F>(&self, op: F)
     where
-        F: FnOnce(&mut MaybeUninit<ReceiverWaker>),
+        F: FnOnce(&mut MaybeUninit<W>),
     {
         #[cfg(loom)]
         {
@@ -1112,12 +1146,12 @@ impl<T> Channel<T> {
 
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
-    unsafe fn write_waker(&self, waker: ReceiverWaker) {
+    unsafe fn write_waker(&self, waker: W) {
         self.with_waker_mut(|slot| slot.as_mut_ptr().write(waker));
     }
 
     #[inline(always)]
-    unsafe fn take_waker(&self) -> ReceiverWaker {
+    unsafe fn take_waker(&self) -> W {
         #[cfg(loom)]
         {
             self.waker.with(|ptr| ptr::read(ptr)).assume_init()
@@ -1134,17 +1168,22 @@ impl<T> Channel<T> {
     unsafe fn drop_waker(&self) {
         self.with_waker_mut(|slot| slot.assume_init_drop());
     }
+}
 
+#[cfg(feature = "async")]
+impl<T, W> Channel<T, W>
+where
+    W: AsyncWaker,
+{
     /// # Safety
     ///
     /// * `Channel::waker` must not have a waker stored in it when calling this method.
     /// * Channel state must not be RECEIVING or UNPARKING when calling this method.
-    #[cfg(feature = "async")]
     unsafe fn write_async_waker(&self, cx: &mut task::Context<'_>) -> Poll<Result<T, RecvError>> {
         // Write our thread instance to the channel.
         // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
         // try to access the waker until it sees the state set to RECEIVING below
-        self.write_waker(ReceiverWaker::task_waker(cx));
+        self.write_waker(W::new(cx));
 
         // ORDERING: we use release ordering on success so the sender can synchronize with
         // our write of the waker. We use relaxed ordering on failure since the sender does
@@ -1240,6 +1279,6 @@ const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
     "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
 
 #[inline]
-pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {
+pub(crate) unsafe fn dealloc<T, W>(channel: NonNull<Channel<T, W>>) {
     drop(Box::from_raw(channel.as_ptr()))
 }
