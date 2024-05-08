@@ -176,6 +176,8 @@ use alloc::boxed::Box;
 use loombox::Box;
 
 mod errors;
+mod waker;
+
 pub use errors::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
