@@ -183,11 +183,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     // Allocate the channel on the heap and get the pointer.
     // The last endpoint of the channel to be alive is responsible for freeing the channel
     // and dropping any object that might have been written to it.
-
-    let channel_ptr = Box::into_raw(Box::new(Channel::new()));
-
-    // SAFETY: `channel_ptr` came from a Box and thus is not null
-    let channel_ptr = unsafe { NonNull::new_unchecked(channel_ptr) };
+    let channel_ptr = NonNull::from(Box::leak(Box::new(Channel::new())));
 
     (
         Sender {
