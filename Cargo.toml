@@ -27,7 +27,7 @@ std = []
 async = []
 
 [target.'cfg(loom)'.dependencies]
-loom = { version = "0.5.3", features = ["futures"] }
+loom = { version = "0.7.2", features = ["futures"] }
 
 [dev-dependencies]
 criterion = "0.3"
