@@ -18,6 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # We don't need to check CVEs against the checked in lockfile,
+      # but only against the newest compatible dependencies.
+      - name: Upgrade all dependencies
+        run: cargo update
+
       - uses: actions-rust-lang/audit@v1.1.11
         name: Audit Rust Dependencies
         with:
