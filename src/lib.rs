@@ -312,17 +312,13 @@ impl<T> Sender<T> {
         }
     }
 
-    /// Returns true if the associated Receiver handle has been dropped.
+    /// Returns true if the associated [`Receiver`] has been dropped.
     ///
     /// If true is returned, a future call to send is guaranteed to return an error.
     pub fn is_closed(&self) -> bool {
-        // SAFETY: Since we are holding a Sender's reference, we know that:
-        // - `send(..)` has not been called yet
-        // - `Sender` has not been dropped.
-        //
-        // This is sufficient to guarantee that the channel is still on the heap.
-        //
-        // Note that if the receiver disconnects it does not free the channel.
+        // SAFETY: The channel exists on the heap for the entire duration of this method and we
+        // only ever acquire shared references to it. Note that if the receiver disconnects it
+        // does not free the channel.
         let channel = unsafe { self.channel_ptr.as_ref() };
 
         // ORDERING: We *chose* a Relaxed ordering here as it sufficient to
