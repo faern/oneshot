@@ -343,3 +343,13 @@ fn send_error_drops_message_correctly_on_into_inner() {
         assert_eq!(counter.count(), 1);
     });
 }
+
+#[test]
+fn dropping_receiver_disconnects_sender() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<()>();
+        assert!(!sender.is_closed());
+        drop(receiver);
+        assert!(sender.is_closed());
+    });
+}
