@@ -36,6 +36,9 @@ criterion = "0.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 async-std = { version = "1", features = ["attributes"] }
 
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(loom)', 'cfg(oneshot_test_delay)'] }
+
 [[bench]]
 name = "benches"
 harness = false

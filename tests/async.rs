@@ -1,4 +1,3 @@
-#![allow(unexpected_cfgs)]
 #![cfg(all(feature = "async", not(loom)))]
 
 use core::mem;

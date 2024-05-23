@@ -1,4 +1,3 @@
-#![allow(unexpected_cfgs)]
 #![cfg(not(loom))]
 
 use oneshot::{channel, Receiver, Sender};
