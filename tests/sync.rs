@@ -1,5 +1,3 @@
-#![allow(unexpected_cfgs)]
-
 use core::mem;
 use oneshot::TryRecvError;
 
