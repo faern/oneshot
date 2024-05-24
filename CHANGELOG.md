@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+
+
+## [0.1.7] - 2024-05-24
 ### Added
 * Add `is_closed` method to the `Sender`.
 
