@@ -2,9 +2,9 @@
 
 use core::{future, mem, pin, task};
 
-#[cfg(loom)]
+#[cfg(feature = "loom")]
 pub use loom::sync::{Arc, Mutex};
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 pub use std::sync::{Arc, Mutex};
 
 mod helpers;

@@ -33,12 +33,12 @@ loom = { version = "0.7.2", features = ["futures"], optional = true }
 [dev-dependencies]
 criterion = "0.3"
 
-[target.'cfg(not(loom))'.dev-dependencies]
+[target.'cfg(not(feature = "loom"))'.dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 async-std = { version = "1", features = ["attributes"] }
 
 [lints.rust]
-unexpected_cfgs = { level = "deny", check-cfg = ['cfg(loom)', 'cfg(oneshot_test_delay)'] }
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_test_delay)'] }
 
 [[bench]]
 name = "benches"
