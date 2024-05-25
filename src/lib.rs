@@ -22,6 +22,7 @@
 //! can receive both blocking and async.
 //!
 //! ```rust
+//! # #[cfg(not(feature = "loom"))] {
 //! use std::sync::mpsc;
 //! use std::thread;
 //! use std::time::Duration;
@@ -71,6 +72,7 @@
 //!             }
 //!         });
 //! }
+//! # }
 //! ```
 //!
 //! # Sync vs async
