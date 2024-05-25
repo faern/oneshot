@@ -32,8 +32,6 @@ loom = { version = "0.7.2", features = ["futures"], optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
-
-[target.'cfg(not(feature = "loom"))'.dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 async-std = { version = "1", features = ["attributes"] }
 
