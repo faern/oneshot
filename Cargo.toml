@@ -26,8 +26,9 @@ std = []
 # Enables async receiving by implementing Future
 async = []
 
-[target.'cfg(loom)'.dependencies]
-loom = { version = "0.7.2", features = ["futures"] }
+[dependencies]
+# Only used for internal correctness testing. Never enable this feature when using oneshot.
+loom = { version = "0.7.2", features = ["futures"], optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
