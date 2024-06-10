@@ -49,3 +49,8 @@ jobs:
       - name: Test with artificial delay
         shell: bash
         run: RUSTFLAGS+="--cfg oneshot_test_delay" cargo hack --feature-powerset --exclude-all-features test
+
+      # Check that the documentation builds and has no warnings
+      - name: Build documentation
+        shell: bash
+        run: RUSTDOCFLAGS="--deny warnings" cargo hack --feature-powerset --exclude-all-features doc
