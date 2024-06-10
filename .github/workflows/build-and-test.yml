@@ -37,11 +37,13 @@ jobs:
         uses: taiki-e/install-action@cargo-hack
 
       - name: Build
+        shell: bash
         run: cargo build --locked
 
       # Run `cargo test` with all combinations of features. Including loom correctness testing
       - name: Test
-        run: cargo hack --feature-powerset --exclude-all-features --optional-deps loom test
+        shell: bash
+        run: LOOM_MAX_BRANCHES=100000 cargo hack --feature-powerset --exclude-all-features --optional-deps loom test
 
       # Run `cargo test` but with artificial delay injected into some code paths. This helps
       # running through some hard-to-time code paths. loom testing is not included since it is not
