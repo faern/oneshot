@@ -37,7 +37,7 @@ jobs:
         uses: taiki-e/install-action@cargo-hack
 
       - name: Build
-        run: cargo build
+        run: cargo build --locked
 
       # Run `cargo test` with all combinations of features. Including loom correctness testing
       - name: Test
