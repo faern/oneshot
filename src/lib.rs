@@ -177,7 +177,9 @@ use alloc::boxed::Box;
 use loombox::Box;
 
 mod errors;
-pub use errors::{RecvError, RecvTimeoutError, SendError, TryRecvError};
+// Wildcard imports are not nice. But since multiple errors have various conditional compilation,
+// this is easier than doing three different imports.
+pub use errors::*;
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
