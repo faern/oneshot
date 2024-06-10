@@ -80,13 +80,15 @@ impl<T> fmt::Debug for SendError<T> {
 #[cfg(feature = "std")]
 impl<T> std::error::Error for SendError<T> {}
 
-/// An error returned from the blocking [`Receiver::recv`](crate::Receiver::recv) method.
+/// An error returned from receiving methods that block/wait until a message is available.
 ///
 /// The receive operation can only fail if the corresponding [`Sender`](crate::Sender) was dropped
-/// before sending any message, or if a message has already been sent and received on the channel.
+/// before sending any message, or if a message has already been received on the channel.
+#[cfg(any(feature = "std", feature = "async"))]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct RecvError;
 
+#[cfg(any(feature = "std", feature = "async"))]
 impl fmt::Display for RecvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "receiving on a closed channel".fmt(f)
@@ -121,8 +123,9 @@ impl fmt::Display for TryRecvError {
 #[cfg(feature = "std")]
 impl std::error::Error for TryRecvError {}
 
-/// An error returned when failing to receive a message in
-/// [`Receiver::recv_timeout`](crate::Receiver::recv_timeout).
+/// An error returned when failing to receive a message in a method that block/wait for a message
+/// for a while, but has a timeout after which it gives up.
+#[cfg(feature = "std")]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum RecvTimeoutError {
     /// No message arrived on the channel before the timeout was reached. The channel is still open.
@@ -133,6 +136,7 @@ pub enum RecvTimeoutError {
     Disconnected,
 }
 
+#[cfg(feature = "std")]
 impl fmt::Display for RecvTimeoutError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let msg = match self {
