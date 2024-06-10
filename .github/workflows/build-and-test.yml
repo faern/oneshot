@@ -39,13 +39,13 @@ jobs:
       - name: Build
         run: cargo build
 
+      # Run `cargo test` with all combinations of features. Including loom correctness testing
       - name: Test
-        run: cargo hack --feature-powerset test
+        run: cargo hack --feature-powerset --exclude-all-features --optional-deps loom test
 
+      # Run `cargo test` but with artificial delay injected into some code paths. This helps
+      # running through some hard-to-time code paths. loom testing is not included since it is not
+      # compatible nor make any sense together with sleeping.
       - name: Test with artificial delay
         shell: bash
-        run: RUSTFLAGS+="--cfg oneshot_test_delay" cargo hack --feature-powerset test
-
-      - name: Test with loom
-        shell: bash
-        run: RUSTFLAGS+="--cfg loom" LOOM_MAX_BRANCHES=100000 cargo hack --feature-powerset test --test sync --test loom
+        run: RUSTFLAGS+="--cfg oneshot_test_delay" cargo hack --feature-powerset --exclude-all-features test
