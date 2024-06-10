@@ -486,7 +486,7 @@ impl<T> Receiver<T> {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
                 // the sender manages to be dropped or send something before we are able to store
                 // our waker object in the channel.
-                #[cfg(oneshot_test_delay)]
+                #[cfg(all(oneshot_test_delay, not(feature = "loom")))]
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
@@ -793,7 +793,7 @@ impl<T> Receiver<T> {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
                 // the sender manages to be dropped or send something before we are able to store
                 // our waker object in the channel.
-                #[cfg(oneshot_test_delay)]
+                #[cfg(all(oneshot_test_delay, not(feature = "loom")))]
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
