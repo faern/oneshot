@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+### Changed
+- Change how loom concurrency testing is triggered. Make it an optional dependency instead of
+  placed behind a custom `cfg(loom)`. This has the pros that it does not end up in the dependency
+  tree of `oneshot` (unless the optional feature `loom` is enabled), which makes this library
+  way smaller for downstream consumers. This has the downside that the crate now exposes a `loom`
+  feature. DOWNSTREAM USERS ARE NOT SUPPOSED TO EVER ENABLE THIS. No stability or semver
+  guarantees exist around the `loom` feature.
 
 
 ## [0.1.7] - 2024-05-24

@@ -1,4 +1,4 @@
-#![cfg(not(loom))]
+#![cfg(not(feature = "loom"))]
 
 use oneshot::{channel, Receiver, Sender};
 

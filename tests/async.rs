@@ -1,4 +1,4 @@
-#![cfg(all(feature = "async", not(loom)))]
+#![cfg(all(feature = "async", not(feature = "loom")))]
 
 use core::mem;
 use core::time::Duration;

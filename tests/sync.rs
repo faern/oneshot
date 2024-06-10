@@ -8,12 +8,12 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "std")]
 mod thread {
-    #[cfg(loom)]
+    #[cfg(feature = "loom")]
     pub use loom::thread::spawn;
-    #[cfg(not(loom))]
+    #[cfg(not(feature = "loom"))]
     pub use std::thread::{sleep, spawn};
 
-    #[cfg(loom)]
+    #[cfg(feature = "loom")]
     pub fn sleep(_timeout: core::time::Duration) {
         loom::thread::yield_now()
     }
@@ -59,7 +59,7 @@ fn send_before_recv() {
     // FIXME: This test does not work with loom. There is something that happens after the
     // channel object becomes larger than ~500 bytes and that makes an atomic read from the state
     // result in "signal: 10, SIGBUS: access to undefined memory"
-    #[cfg(not(loom))]
+    #[cfg(not(feature = "loom"))]
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<[u8; 4096]>();
         assert!(sender.send([0b10101010; 4096]).is_ok());
@@ -246,16 +246,16 @@ fn recv_deadline_and_timeout_no_time() {
 }
 
 // This test doesn't give meaningful results when run with oneshot_test_delay and loom
-#[cfg(all(feature = "std", not(all(oneshot_test_delay, loom))))]
+#[cfg(all(feature = "std", not(all(oneshot_test_delay, feature = "loom"))))]
 #[test]
 fn recv_deadline_time_should_elapse() {
     maybe_loom_model(|| {
         let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
-        #[cfg(not(loom))]
+        #[cfg(not(feature = "loom"))]
         let timeout = Duration::from_millis(100);
-        #[cfg(loom)]
+        #[cfg(feature = "loom")]
         let timeout = Duration::from_millis(1);
         assert_eq!(
             receiver.recv_deadline(start + timeout),
@@ -266,16 +266,16 @@ fn recv_deadline_time_should_elapse() {
     })
 }
 
-#[cfg(all(feature = "std", not(all(oneshot_test_delay, loom))))]
+#[cfg(all(feature = "std", not(all(oneshot_test_delay, feature = "loom"))))]
 #[test]
 fn recv_timeout_time_should_elapse() {
     maybe_loom_model(|| {
         let (_sender, receiver) = oneshot::channel::<u128>();
 
         let start = Instant::now();
-        #[cfg(not(loom))]
+        #[cfg(not(feature = "loom"))]
         let timeout = Duration::from_millis(100);
-        #[cfg(loom)]
+        #[cfg(feature = "loom")]
         let timeout = Duration::from_millis(1);
 
         assert_eq!(
@@ -287,7 +287,7 @@ fn recv_timeout_time_should_elapse() {
     })
 }
 
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 #[test]
 fn non_send_type_can_be_used_on_same_thread() {
     use std::ptr;

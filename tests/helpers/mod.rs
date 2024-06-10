@@ -2,23 +2,23 @@
 
 extern crate alloc;
 
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 use alloc::sync::Arc;
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-#[cfg(loom)]
+#[cfg(feature = "loom")]
 use loom::sync::{
     atomic::{AtomicUsize, Ordering::SeqCst},
     Arc,
 };
 
-#[cfg(loom)]
+#[cfg(feature = "loom")]
 pub mod waker;
 
 pub fn maybe_loom_model(test: impl Fn() + Sync + Send + 'static) {
-    #[cfg(loom)]
+    #[cfg(feature = "loom")]
     loom::model(test);
-    #[cfg(not(loom))]
+    #[cfg(not(feature = "loom"))]
     test();
 }
 
