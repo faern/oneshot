@@ -26,8 +26,10 @@ std = []
 # Enables async receiving by implementing Future
 async = []
 
-[dependencies]
-# Only used for internal correctness testing. Never enable this feature when using oneshot.
+# Only used for internal correctness testing.
+# Downstream users of oneshot should never enable this feature. Enabling it does nothing.
+# To compile oneshot built against loom one must *also* set RUSTFLAGS="--cfg oneshot_loom"
+[target.'cfg(oneshot_loom)'.dependencies]
 loom = { version = "0.7.2", features = ["futures"], optional = true }
 
 [dev-dependencies]
@@ -36,7 +38,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] 
 async-std = { version = "1", features = ["attributes"] }
 
 [lints.rust]
-unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_test_delay)'] }
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_loom)', 'cfg(oneshot_test_delay)'] }
 
 [[bench]]
 name = "benches"

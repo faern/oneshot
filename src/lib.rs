@@ -116,7 +116,7 @@
 #![deny(rust_2018_idioms)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(oneshot_loom))]
 extern crate alloc;
 
 use core::{
@@ -125,20 +125,20 @@ use core::{
     ptr::{self, NonNull},
 };
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(oneshot_loom))]
 use core::{
     cell::UnsafeCell,
     sync::atomic::{fence, AtomicU8, Ordering::*},
 };
-#[cfg(feature = "loom")]
+#[cfg(oneshot_loom)]
 use loom::{
     cell::UnsafeCell,
     sync::atomic::{fence, AtomicU8, Ordering::*},
 };
 
-#[cfg(all(feature = "async", not(feature = "loom")))]
+#[cfg(all(feature = "async", not(oneshot_loom)))]
 use core::hint;
-#[cfg(all(feature = "async", feature = "loom"))]
+#[cfg(all(feature = "async", oneshot_loom))]
 use loom::hint;
 
 #[cfg(feature = "async")]
@@ -151,10 +151,10 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "std")]
 mod thread {
-    #[cfg(not(feature = "loom"))]
+    #[cfg(not(oneshot_loom))]
     pub use std::thread::{current, park, park_timeout, Thread};
 
-    #[cfg(feature = "loom")]
+    #[cfg(oneshot_loom)]
     pub use loom::thread::{current, park, Thread};
 
     // loom does not support parking with a timeout. So we just
@@ -163,17 +163,17 @@ mod thread {
     // One thing to note is that very short timeouts are needed
     // when using loom, since otherwise the looping will cause
     // an overflow in loom.
-    #[cfg(feature = "loom")]
+    #[cfg(oneshot_loom)]
     pub fn park_timeout(_timeout: std::time::Duration) {
         loom::thread::yield_now()
     }
 }
 
-#[cfg(feature = "loom")]
+#[cfg(oneshot_loom)]
 mod loombox;
-#[cfg(not(feature = "loom"))]
+#[cfg(not(oneshot_loom))]
 use alloc::boxed::Box;
-#[cfg(feature = "loom")]
+#[cfg(oneshot_loom)]
 use loombox::Box;
 
 mod errors;
@@ -488,7 +488,7 @@ impl<T> Receiver<T> {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
                 // the sender manages to be dropped or send something before we are able to store
                 // our waker object in the channel.
-                #[cfg(all(oneshot_test_delay, not(feature = "loom")))]
+                #[cfg(all(oneshot_test_delay, not(oneshot_loom)))]
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
@@ -795,7 +795,7 @@ impl<T> Receiver<T> {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
                 // the sender manages to be dropped or send something before we are able to store
                 // our waker object in the channel.
-                #[cfg(all(oneshot_test_delay, not(feature = "loom")))]
+                #[cfg(all(oneshot_test_delay, not(oneshot_loom)))]
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 // Write our waker instance to the channel.
@@ -1055,12 +1055,12 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn message(&self) -> &MaybeUninit<T> {
-        #[cfg(feature = "loom")]
+        #[cfg(oneshot_loom)]
         {
             self.message.with(|ptr| &*ptr)
         }
 
-        #[cfg(not(feature = "loom"))]
+        #[cfg(not(oneshot_loom))]
         {
             &*self.message.get()
         }
@@ -1071,12 +1071,12 @@ impl<T> Channel<T> {
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        #[cfg(feature = "loom")]
+        #[cfg(oneshot_loom)]
         {
             self.message.with_mut(|ptr| op(&mut *ptr))
         }
 
-        #[cfg(not(feature = "loom"))]
+        #[cfg(not(oneshot_loom))]
         {
             op(&mut *self.message.get())
         }
@@ -1088,12 +1088,12 @@ impl<T> Channel<T> {
     where
         F: FnOnce(&mut MaybeUninit<ReceiverWaker>),
     {
-        #[cfg(feature = "loom")]
+        #[cfg(oneshot_loom)]
         {
             self.waker.with_mut(|ptr| op(&mut *ptr))
         }
 
-        #[cfg(not(feature = "loom"))]
+        #[cfg(not(oneshot_loom))]
         {
             op(&mut *self.waker.get())
         }
@@ -1106,12 +1106,12 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn take_message(&self) -> T {
-        #[cfg(feature = "loom")]
+        #[cfg(oneshot_loom)]
         {
             self.message.with(|ptr| ptr::read(ptr)).assume_init()
         }
 
-        #[cfg(not(feature = "loom"))]
+        #[cfg(not(oneshot_loom))]
         {
             ptr::read(self.message.get()).assume_init()
         }
@@ -1130,12 +1130,12 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn take_waker(&self) -> ReceiverWaker {
-        #[cfg(feature = "loom")]
+        #[cfg(oneshot_loom)]
         {
             self.waker.with(|ptr| ptr::read(ptr)).assume_init()
         }
 
-        #[cfg(not(feature = "loom"))]
+        #[cfg(not(oneshot_loom))]
         {
             ptr::read(self.waker.get()).assume_init()
         }
@@ -1235,7 +1235,7 @@ impl ReceiverWaker {
     }
 }
 
-#[cfg(not(feature = "loom"))]
+#[cfg(not(oneshot_loom))]
 #[test]
 fn receiver_waker_size() {
     let expected: usize = match (cfg!(feature = "std"), cfg!(feature = "async")) {

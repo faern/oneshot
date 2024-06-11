@@ -1,4 +1,4 @@
-#![cfg(feature = "loom")]
+#![cfg(oneshot_loom)]
 
 use oneshot::TryRecvError;
 
