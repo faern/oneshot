@@ -2,9 +2,9 @@
 
 use core::{future, mem, pin, task};
 
-#[cfg(feature = "loom")]
+#[cfg(oneshot_loom)]
 pub use loom::sync::{Arc, Mutex};
-#[cfg(not(feature = "loom"))]
+#[cfg(not(oneshot_loom))]
 pub use std::sync::{Arc, Mutex};
 
 mod helpers;
