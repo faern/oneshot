@@ -1,5 +1,9 @@
 # oneshot
 
+**This fork of [`oneshot`](https://crates.io/crates/oneshot) is no longer required.
+The only reason this fork was created was to get rid of the `loom` dependency.
+Upstream `oneshot` has now solved that, by making `loom` an optional dependency.**
+
 Oneshot spsc (single producer, single consumer) channel. Meaning each channel instance
 can only transport a single message. This has a few nice outcomes. One thing is that
 the implementation can be very efficient, utilizing the knowledge that there will
