@@ -66,7 +66,6 @@ fn bench(c: &mut Criterion) {
     bench_send_and_recv!(c,
         () => ();
         u8 => 7u8;
-        usize => 9876usize;
         u128 => 1234567u128;
         [u8; 64] => [0b10101010u8; 64];
         [u8; 4096] => [0b10101010u8; 4096]
