@@ -33,7 +33,7 @@ async = []
 loom = { version = "0.7.2", features = ["futures"], optional = true }
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.5.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 async-std = { version = "1", features = ["attributes"] }
 
