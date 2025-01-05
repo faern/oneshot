@@ -264,7 +264,7 @@ impl<T> Sender<T> {
         // Set the state to signal there is a message on the channel.
         // ORDERING: we use release ordering to ensure the write of the message is visible to the
         // receiving thread. The EMPTY and DISCONNECTED branches do not observe any shared state,
-        // and thus we do not need acquire orderng. The RECEIVING branch manages synchronization
+        // and thus we do not need acquire ordering. The RECEIVING branch manages synchronization
         // independent of this operation.
         //
         // EMPTY + 1 = MESSAGE
