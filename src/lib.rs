@@ -598,6 +598,29 @@ impl<T> Receiver<T> {
         }
     }
 
+    /// Returns the current state of the channel.
+    #[inline]
+    pub fn state(&self) -> ChannelState {
+        // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
+        // is still alive, meaning that even if the sender was dropped then it would have observed
+        // the fact that we're still alive and left the responsibility of deallocating the
+        // channel to us, so `self.channel` is valid
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
+        match channel.state.load(Acquire) {
+            DISCONNECTED => ChannelState::Disconnected,
+            EMPTY => ChannelState::Empty,
+            MESSAGE => ChannelState::Message,
+            RECEIVING => ChannelState::Receiving,
+            #[cfg(any(feature = "std", feature = "async"))]
+            UNPARKING => ChannelState::Unparking,
+            // We treat everything else (no other values should
+            // ever end up here) as Disconnected, and by that,
+            // we avoid generating a panicking code path
+            _ => ChannelState::Disconnected,
+        }
+    }
+
     /// Attempts to wait for a message from the [`Sender`], returning an error if the channel is
     /// disconnected. This is a non consuming version of [`Receiver::recv`], but with a bit
     /// worse performance. Prefer `[`Receiver::recv`]` if your code allows consuming the receiver.
@@ -1029,7 +1052,27 @@ mod states {
     /// channel, it is disconnected after the one message it is supposed to hold has been
     /// transmitted.
     pub const DISCONNECTED: u8 = 0b010;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum ChannelState {
+        /// The initial channel state. Active while both endpoints are still alive, no message has been
+        /// sent, and the receiver is not receiving.
+        Empty = 0b011,
+        /// A message has been sent to the channel, but the receiver has not yet read it.
+        Message = 0b100,
+        /// No message has yet been sent on the channel, but the receiver is currently receiving.
+        Receiving = 0b000,
+        #[cfg(any(feature = "std", feature = "async"))]
+        Unparking = 0b001,
+        /// The channel has been closed. This means that either the sender or receiver has been dropped,
+        /// or the message sent to the channel has already been received. Since this is a oneshot
+        /// channel, it is disconnected after the one message it is supposed to hold has been
+        /// transmitted.
+        Disconnected = 0b010,
+    }
 }
+pub use states::ChannelState;
 use states::*;
 
 /// Internal channel data structure structure. the `channel` method allocates and puts one instance

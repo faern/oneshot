@@ -1,5 +1,5 @@
 use core::mem;
-use oneshot::TryRecvError;
+use oneshot::{ChannelState, TryRecvError};
 
 #[cfg(feature = "std")]
 use oneshot::{RecvError, RecvTimeoutError};
@@ -26,9 +26,13 @@ use helpers::{maybe_loom_model, DropCounter};
 fn send_before_try_recv() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
+        assert_eq!(receiver.state(), ChannelState::Empty);
+
         assert!(sender.send(19i128).is_ok());
 
+        assert_eq!(receiver.state(), ChannelState::Message);
         assert_eq!(receiver.try_recv(), Ok(19i128));
+        assert_eq!(receiver.state(), ChannelState::Disconnected);
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
         #[cfg(feature = "std")]
         {
@@ -43,17 +47,23 @@ fn send_before_try_recv() {
 fn send_before_recv() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<()>();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         assert!(sender.send(()).is_ok());
+        assert_eq!(receiver.state(), ChannelState::Message);
         assert_eq!(receiver.recv(), Ok(()));
     });
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u8>();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         assert!(sender.send(19).is_ok());
+        assert_eq!(receiver.state(), ChannelState::Message);
         assert_eq!(receiver.recv(), Ok(19));
     });
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u64>();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         assert!(sender.send(21).is_ok());
+        assert_eq!(receiver.state(), ChannelState::Message);
         assert_eq!(receiver.recv(), Ok(21));
     });
     // FIXME: This test does not work with loom. There is something that happens after the
@@ -62,7 +72,9 @@ fn send_before_recv() {
     #[cfg(not(oneshot_loom))]
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<[u8; 4096]>();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         assert!(sender.send([0b10101010; 4096]).is_ok());
+        assert_eq!(receiver.state(), ChannelState::Message);
         assert!(receiver.recv().unwrap()[..] == [0b10101010; 4096][..]);
     });
 }
@@ -72,9 +84,12 @@ fn send_before_recv() {
 fn send_before_recv_ref() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         assert!(sender.send(19i128).is_ok());
 
+        assert_eq!(receiver.state(), ChannelState::Message);
         assert_eq!(receiver.recv_ref(), Ok(19i128));
+        assert_eq!(receiver.state(), ChannelState::Disconnected);
         assert_eq!(receiver.recv_ref(), Err(RecvError));
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
         assert!(receiver.recv_timeout(Duration::from_secs(1)).is_err());
@@ -86,13 +101,16 @@ fn send_before_recv_ref() {
 fn send_before_recv_timeout() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         assert!(sender.send(19i128).is_ok());
 
         let start = Instant::now();
         let timeout = Duration::from_secs(1);
+        assert_eq!(receiver.state(), ChannelState::Message);
         assert_eq!(receiver.recv_timeout(timeout), Ok(19i128));
         assert!(start.elapsed() < Duration::from_millis(100));
 
+        assert_eq!(receiver.state(), ChannelState::Disconnected);
         assert!(receiver.recv_timeout(timeout).is_err());
         assert!(receiver.try_recv().is_err());
         assert!(receiver.recv().is_err());
@@ -133,7 +151,9 @@ fn try_recv_with_dropped_sender() {
 fn recv_with_dropped_sender() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         mem::drop(sender);
+        assert_eq!(receiver.state(), ChannelState::Disconnected);
         receiver.recv().unwrap_err();
     })
 }
@@ -143,6 +163,7 @@ fn recv_with_dropped_sender() {
 fn recv_before_send() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(2));
             sender.send(9u128).unwrap();
@@ -157,11 +178,13 @@ fn recv_before_send() {
 fn recv_timeout_before_send() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(2));
             sender.send(9u128).unwrap();
         });
         assert_eq!(receiver.recv_timeout(Duration::from_secs(1)), Ok(9));
+        assert_eq!(receiver.state(), ChannelState::Disconnected);
         t.join().unwrap();
     })
 }
@@ -171,6 +194,7 @@ fn recv_timeout_before_send() {
 fn recv_before_send_then_drop_sender() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(10));
             mem::drop(sender);
@@ -185,6 +209,7 @@ fn recv_before_send_then_drop_sender() {
 fn recv_timeout_before_send_then_drop_sender() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
+        assert_eq!(receiver.state(), ChannelState::Empty);
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_millis(10));
             mem::drop(sender);
@@ -199,6 +224,7 @@ fn try_recv() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(receiver.state(), ChannelState::Empty);
         mem::drop(sender)
     })
 }
