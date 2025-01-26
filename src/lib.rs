@@ -1053,23 +1053,23 @@ mod states {
     /// transmitted.
     pub const DISCONNECTED: u8 = 0b010;
 
-    #[repr(C)]
+    #[repr(u8)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum ChannelState {
         /// The initial channel state. Active while both endpoints are still alive, no message has been
         /// sent, and the receiver is not receiving.
-        Empty = 0b011,
+        Empty = EMPTY,
         /// A message has been sent to the channel, but the receiver has not yet read it.
-        Message = 0b100,
+        Message = MESSAGE,
         /// No message has yet been sent on the channel, but the receiver is currently receiving.
-        Receiving = 0b000,
+        Receiving = RECEIVING,
         #[cfg(any(feature = "std", feature = "async"))]
-        Unparking = 0b001,
+        Unparking = UNPARKING,
         /// The channel has been closed. This means that either the sender or receiver has been dropped,
         /// or the message sent to the channel has already been received. Since this is a oneshot
         /// channel, it is disconnected after the one message it is supposed to hold has been
         /// transmitted.
-        Disconnected = 0b010,
+        Disconnected = DISCONNECTED,
     }
 }
 pub use states::ChannelState;
