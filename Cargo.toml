@@ -33,12 +33,20 @@ async = []
 loom = { version = "0.7.2", features = ["futures"], optional = true }
 
 [dev-dependencies]
-criterion = "0.5.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 async-std = { version = "1", features = ["attributes"] }
 
+# Benchmarking only dependency. This is hidden behind a `cfg(criterion)` to avoid it being
+# pulled in during `cargo test` runs. Mostly because criterion has a much higher MSRV than
+# this library, so it becomes impossible to run `cargo test` on the MSRV compiler without
+# this hack.
+# To run benchmarks, run with `RUSTFLAGS="--cfg criterion" cargo bench`
+[target.'cfg(criterion)'.dev-dependencies]
+criterion = "0.5.1"
+
+
 [lints.rust]
-unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_loom)', 'cfg(oneshot_test_delay)'] }
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_loom)', 'cfg(oneshot_test_delay)', 'cfg(criterion)'] }
 
 [[bench]]
 name = "benches"
