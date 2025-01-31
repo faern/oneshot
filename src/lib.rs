@@ -1237,6 +1237,7 @@ impl ReceiverWaker {
 
 #[cfg(not(oneshot_loom))]
 #[test]
+#[ignore = "Unstable test. Different Rust versions have different sizes for Thread"]
 fn receiver_waker_size() {
     let expected: usize = match (cfg!(feature = "std"), cfg!(feature = "async")) {
         (false, false) => 0,
