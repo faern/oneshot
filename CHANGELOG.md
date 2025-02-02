@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+
+
+## [0.1.9] - 2025-02-02
 ### Added
 - Implement `Sync` for `Sender`. There is not a whole lot someone can do with a `&Sender`,
   but this allows storing the sender in places that are overly conservative and require
