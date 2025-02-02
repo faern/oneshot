@@ -227,6 +227,12 @@ pub struct Receiver<T> {
 }
 
 unsafe impl<T: Send> Send for Sender<T> {}
+
+// SAFETY: The only methods that assumes there is only a single reference to the sender
+// takes `self` by value, guaranteeing that there is only one reference to the sender at
+// the time it is called.
+unsafe impl<T: Sync> Sync for Sender<T> {}
+
 unsafe impl<T: Send> Send for Receiver<T> {}
 impl<T> Unpin for Receiver<T> {}
 
