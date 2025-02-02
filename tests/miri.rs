@@ -308,7 +308,7 @@ fn tx_drop_rx_poll_to_completion() {
         let mut cx = task::Context::from_waker(Waker::noop());
         loop {
             match rx.as_mut().poll(&mut cx) {
-                Poll::Ready(Err(oneshot::RecvError)) => break,
+                Poll::Ready(Err(_)) => break,
                 Poll::Ready(result) => panic!("Unexpected result: {:?}", result),
                 Poll::Pending => spin_loop(),
             }

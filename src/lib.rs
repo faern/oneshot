@@ -609,7 +609,7 @@ impl<T> Receiver<T> {
                                 // sender's final write of the DISCONNECTED state.
                                 unsafe { dealloc(channel_ptr) };
 
-                                break Err(RecvError);
+                                break Err(RecvError::new());
                             }
                             // State did not change, spurious wakeup, park again.
                             RECEIVING | UNPARKING => (),
@@ -654,7 +654,7 @@ impl<T> Receiver<T> {
                         // write of the channel state.
                         unsafe { dealloc(channel_ptr) };
 
-                        Err(RecvError)
+                        Err(RecvError::new())
                     }
                     _ => unreachable!(),
                 }
@@ -684,7 +684,7 @@ impl<T> Receiver<T> {
                 // final write of the channel state.
                 unsafe { dealloc(channel_ptr) };
 
-                Err(RecvError)
+                Err(RecvError::new())
             }
             // The receiver must have been `Future::poll`ed prior to this call.
             #[cfg(feature = "async")]
@@ -705,7 +705,7 @@ impl<T> Receiver<T> {
     /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_ref(&self) -> Result<T, RecvError> {
-        self.start_recv_ref(RecvError, |channel| {
+        self.start_recv_ref(RecvError::new(), |channel| {
             loop {
                 thread::park();
 
@@ -723,7 +723,7 @@ impl<T> Receiver<T> {
                         break Ok(unsafe { channel.take_message() });
                     }
                     // The sender was dropped while we were parked.
-                    DISCONNECTED => break Err(RecvError),
+                    DISCONNECTED => break Err(RecvError::new()),
                     // State did not change, spurious wakeup, park again.
                     RECEIVING | UNPARKING => (),
                     _ => unreachable!(),
@@ -1077,7 +1077,7 @@ impl<T> core::future::Future for Receiver<T> {
                     }
                     // The sender was dropped before sending anything while we prepared to park.
                     // The sender has taken the waker already.
-                    Err(DISCONNECTED) => Poll::Ready(Err(RecvError)),
+                    Err(DISCONNECTED) => Poll::Ready(Err(RecvError::new())),
                     // The sender is currently waking us up.
                     Err(UNPARKING) => {
                         // We can't trust that the old waker that the sender has access to
@@ -1105,7 +1105,7 @@ impl<T> core::future::Future for Receiver<T> {
                 Poll::Ready(Ok(unsafe { channel.take_message() }))
             }
             // The sender was dropped before sending anything, or we already received the message.
-            DISCONNECTED => Poll::Ready(Err(RecvError)),
+            DISCONNECTED => Poll::Ready(Err(RecvError::new())),
             // The sender has observed the RECEIVING state and is currently reading the waker from
             // a previous poll. We need to loop here until we observe the MESSAGE or DISCONNECTED
             // state. We busy loop here since we know the sender is done very soon.
@@ -1129,7 +1129,7 @@ impl<T> core::future::Future for Receiver<T> {
                     }
                     // The sender was dropped. Our drop impl will synchronize with the sender's
                     // final write of the channel state and deallocate the channel.
-                    DISCONNECTED => break Poll::Ready(Err(RecvError)),
+                    DISCONNECTED => break Poll::Ready(Err(RecvError::new())),
                     // Sender is still unparking us... Spin more
                     UNPARKING => (),
                     _ => unreachable!(),
@@ -1403,7 +1403,7 @@ impl<T> Channel<T> {
                 // RECEIVING state, so it has not accessed the waker. We must drop it.
                 self.drop_waker();
 
-                Poll::Ready(Err(RecvError))
+                Poll::Ready(Err(RecvError::new()))
             }
             _ => unreachable!(),
         }
