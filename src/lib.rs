@@ -775,6 +775,42 @@ impl<T> Receiver<T> {
         })
     }
 
+    /// Returns true if the associated [`Sender`] was dropped before sending a message. Or if
+    /// the message has already been received.
+    ///
+    /// If `true` is returned, all future calls to receive methods are guaranteed to return
+    /// a disconnected error. And future calls to this method is guaranteed to also return `true`.
+    pub fn is_closed(&self) -> bool {
+        // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
+        // is still alive, meaning that even if the sender was dropped then it would have observed
+        // the fact that we're still alive and left the responsibility of deallocating the
+        // channel to us, so `self.channel` is valid
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
+        // ORDERING: We *chose* a Relaxed ordering here as it is sufficient to
+        // enforce the method's contract. Once true has been observed, it will remain true.
+        // However, if false is observed, the sender might have just disconnected but this thread
+        // has not observed it yet.
+        channel.state.load(Relaxed) == DISCONNECTED
+    }
+
+    /// Returns true if there is a message in the channel, ready to be received.
+    ///
+    /// If `true` is returned, the next call to a receive method is guaranteed to return
+    /// a message.
+    pub fn has_message(&self) -> bool {
+        // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
+        // is still alive, meaning that even if the sender was dropped then it would have observed
+        // the fact that we're still alive and left the responsibility of deallocating the
+        // channel to us, so `self.channel` is valid
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
+        // ORDERING: An acquire ordering is used to guarantee no subsequent loads is reordered
+        // before this one. This upholds the contract that if true is returned, the next call to
+        // a receive method is guaranteed to also abserve the `MESSAGE` state and return a message.
+        channel.state.load(Acquire) == MESSAGE
+    }
+
     /// Begins the process of receiving on the channel by reference. If the message is already
     /// ready, or the sender has disconnected, then this function will return the appropriate
     /// Result immediately. Otherwise, it will write the waker to memory, check to see if the

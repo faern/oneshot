@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+### Added
+- Add `is_closed` and `has_message` to the `Receiver`. Allows polling for the channel
+  state without modifying the channel or pulling the message from it.
 
 
 ## [0.1.9] - 2025-02-02

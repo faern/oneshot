@@ -26,9 +26,12 @@ use helpers::{maybe_loom_model, DropCounter};
 fn send_before_try_recv() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel();
+        assert!(!receiver.has_message());
         assert!(sender.send(19i128).is_ok());
 
+        assert!(receiver.has_message());
         assert_eq!(receiver.try_recv(), Ok(19i128));
+        assert!(!receiver.has_message());
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
         #[cfg(feature = "std")]
         {
@@ -124,6 +127,7 @@ fn try_recv_with_dropped_sender() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
         mem::drop(sender);
+        assert!(!receiver.has_message());
         receiver.try_recv().unwrap_err();
     })
 }
@@ -347,7 +351,19 @@ fn dropping_receiver_disconnects_sender() {
     maybe_loom_model(|| {
         let (sender, receiver) = oneshot::channel::<()>();
         assert!(!sender.is_closed());
+        assert!(!receiver.is_closed());
         drop(receiver);
         assert!(sender.is_closed());
+    });
+}
+
+#[test]
+fn dropping_sender_disconnects_receiver() {
+    maybe_loom_model(|| {
+        let (sender, receiver) = oneshot::channel::<()>();
+        assert!(!sender.is_closed());
+        assert!(!receiver.is_closed());
+        drop(sender);
+        assert!(receiver.is_closed());
     });
 }
