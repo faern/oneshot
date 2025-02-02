@@ -51,3 +51,7 @@ unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_loom)', 'cfg(onesh
 [[bench]]
 name = "benches"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -115,6 +115,9 @@
 
 #![deny(rust_2018_idioms)]
 #![cfg_attr(not(feature = "std"), no_std)]
+// Enables this nightly only feature for the documentation build on docs.rs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 #[cfg(not(oneshot_loom))]
 extern crate alloc;
