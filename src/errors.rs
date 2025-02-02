@@ -86,7 +86,14 @@ impl<T> std::error::Error for SendError<T> {}
 /// before sending any message, or if a message has already been received on the channel.
 #[cfg(any(feature = "std", feature = "async"))]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct RecvError;
+pub struct RecvError(());
+
+#[cfg(any(feature = "std", feature = "async"))]
+impl RecvError {
+    pub(crate) const fn new() -> Self {
+        RecvError(())
+    }
+}
 
 #[cfg(any(feature = "std", feature = "async"))]
 impl fmt::Display for RecvError {
