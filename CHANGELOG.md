@@ -15,9 +15,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+
+
+## [0.1.10] - 2025-02-04
 ### Added
 - Add `is_closed` and `has_message` to the `Receiver`. Allows polling for the channel
   state without modifying the channel or pulling the message from it.
+- Make the cargo features show up on docs.rs for better discoverability.
 
 
 ## [0.1.9] - 2025-02-02
