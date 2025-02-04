@@ -85,7 +85,7 @@ impl<T> std::error::Error for SendError<T> {}
 /// The receive operation can only fail if the corresponding [`Sender`](crate::Sender) was dropped
 /// before sending any message, or if a message has already been received on the channel.
 #[cfg(any(feature = "std", feature = "async"))]
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug)]
 pub struct RecvError(());
 
 #[cfg(any(feature = "std", feature = "async"))]
