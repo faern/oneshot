@@ -203,6 +203,11 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     )
 }
 
+/// Sending end of a oneshot channel.
+///
+/// Created and returned from the [`channel`] function.
+///
+/// Can be used to send a message to the corresponding [`Receiver`].
 #[derive(Debug)]
 pub struct Sender<T> {
     channel_ptr: NonNull<Channel<T>>,
@@ -225,6 +230,15 @@ pub struct Sender<T> {
     _invariant: PhantomData<fn(T) -> T>,
 }
 
+/// Receiving end of a oneshot channel.
+///
+/// Created and returned from the [`channel`] function.
+///
+/// Can be used to receive a message from the corresponding [`Sender`]. How the message
+/// can be received depends on what features are enabled.
+///
+/// This type implement [`IntoFuture`](core::future::IntoFuture) when the `async` feature is enabled.
+/// This allows awaiting it directly in an async context.
 #[derive(Debug)]
 pub struct Receiver<T> {
     // Covariance is the right choice here. Consider the example presented in Sender, and you'll
