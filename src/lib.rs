@@ -203,6 +203,21 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     )
 }
 
+/// Ergonomic shorthand for creating a channel and immediately convert the [`Receiver`] into
+/// a future.
+///
+/// This can be useful when you need to pass the receiver to a function that expects a
+/// type implementing [`Future`](core::future::Future) directly. Using this function is not necessary when
+/// you are going to use `.await` on the receiver, as that will automatically call
+/// [`IntoFuture::into_future`](core::future::IntoFuture::into_future) in the background.
+#[cfg(feature = "async")]
+#[inline(always)]
+pub fn async_channel<T>() -> (Sender<T>, AsyncReceiver<T>) {
+    let (sender, receiver) = channel();
+    let async_receiver = core::future::IntoFuture::into_future(receiver);
+    (sender, async_receiver)
+}
+
 /// Sending end of a oneshot channel.
 ///
 /// Created and returned from the [`channel`] function.
@@ -246,6 +261,20 @@ pub struct Receiver<T> {
     channel_ptr: NonNull<Channel<T>>,
 }
 
+/// A version of [`Receiver`] that implements [`Future`](core::future::Future), for awaiting the
+/// message in an async context.
+///
+/// This type is automatically created and polled in the background when awaiting a [`Receiver`].
+/// But it can also be created explicitly with the [`async_channel`] function or by calling
+/// [`IntoFuture::into_future`](core::future::IntoFuture::into_future) on the [`Receiver`].
+#[cfg(feature = "async")]
+#[derive(Debug)]
+pub struct AsyncReceiver<T> {
+    // Covariance is the right choice here. Consider the example presented in Sender, and you'll
+    // see that if we replaced `rx` instead then we would get the expected behavior
+    channel_ptr: NonNull<Channel<T>>,
+}
+
 unsafe impl<T: Send> Send for Sender<T> {}
 
 // SAFETY: The only methods that assumes there is only a single reference to the sender
@@ -254,7 +283,11 @@ unsafe impl<T: Send> Send for Sender<T> {}
 unsafe impl<T: Sync> Sync for Sender<T> {}
 
 unsafe impl<T: Send> Send for Receiver<T> {}
-impl<T> Unpin for Receiver<T> {}
+
+#[cfg(feature = "async")]
+unsafe impl<T: Send> Send for AsyncReceiver<T> {}
+#[cfg(feature = "async")]
+impl<T> Unpin for AsyncReceiver<T> {}
 
 impl<T> Sender<T> {
     /// Sends `message` over the channel to the corresponding [`Receiver`].
@@ -945,7 +978,23 @@ impl<T> Receiver<T> {
 }
 
 #[cfg(feature = "async")]
-impl<T> core::future::Future for Receiver<T> {
+impl<T> core::future::IntoFuture for Receiver<T> {
+    type Output = Result<T, RecvError>;
+    type IntoFuture = AsyncReceiver<T>;
+
+    #[inline(always)]
+    fn into_future(self) -> Self::IntoFuture {
+        let Receiver { channel_ptr } = self;
+
+        // Don't run our Drop implementation, since the receiver lives on as an async receiver.
+        mem::forget(self);
+
+        AsyncReceiver { channel_ptr }
+    }
+}
+
+#[cfg(feature = "async")]
+impl<T> core::future::Future for AsyncReceiver<T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
@@ -1058,6 +1107,40 @@ impl<T> Drop for Receiver<T> {
             }
             // The receiver has been polled.
             #[cfg(feature = "async")]
+            RECEIVING => {
+                // TODO: figure this out when async is fixed
+                unsafe { channel.drop_waker() };
+            }
+            // The sender was already dropped. We are responsible for freeing the channel.
+            DISCONNECTED => {
+                // SAFETY: see safety comment at top of function
+                unsafe { dealloc(self.channel_ptr) };
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[cfg(feature = "async")]
+impl<T> Drop for AsyncReceiver<T> {
+    fn drop(&mut self) {
+        // SAFETY: since the receiving side is still alive the sender would have observed that and
+        // left deallocating the channel allocation to us.
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
+        // Set the channel state to disconnected and read what state the receiver was in
+        match channel.state.swap(DISCONNECTED, Acquire) {
+            // The sender has not sent anything, nor is it dropped.
+            EMPTY => (),
+            // The sender already sent something. We must drop it, and free the channel.
+            MESSAGE => {
+                // SAFETY: we are in the message state so the message is initialized
+                unsafe { channel.drop_message() };
+
+                // SAFETY: see safety comment at top of function
+                unsafe { dealloc(self.channel_ptr) };
+            }
+            // The receiver has been polled.
             RECEIVING => {
                 // TODO: figure this out when async is fixed
                 unsafe { channel.drop_waker() };
