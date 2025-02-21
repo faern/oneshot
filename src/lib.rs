@@ -88,19 +88,20 @@
 //!
 //! The receiving endpoint of this channel implements Rust's `Future` trait and can be waited on
 //! in an asynchronous task. This implementation is completely executor/runtime agnostic. It should
-//! be possible to use this library with any executor.
+//! be possible to use this library with any executor, or even pass messages between tasks running
+//! in different executors.
 //!
 
 // # Implementation description
 //
-// When a channel is created via the channel function, it creates a single heap allocation
+// When a channel is created via the `channel` function, it creates a single heap allocation
 // containing:
 // * A one byte atomic integer that represents the current channel state,
 // * Uninitialized memory to fit the message,
 // * Uninitialized memory to fit the waker that can wake the receiving task or thread up.
 //
 // The size of the waker depends on which features are activated, it ranges from 0 to 24 bytes[1].
-// So with all features enabled (the default) each channel allocates 25 bytes plus the size of the
+// So with all features enabled each channel allocates 25 bytes plus the size of the
 // message, plus any padding needed to get correct memory alignment.
 //
 // The Sender and Receiver only holds a raw pointer to the heap channel object. The last endpoint
@@ -111,7 +112,7 @@
 // ## Footnotes
 //
 // [1]: Mind that the waker only takes zero bytes when all features are disabled, making it
-//      impossible to *wait* for the message. `try_recv` the only available method in this scenario.
+//      impossible to *wait* for the message. `try_recv` is the only available method in this scenario.
 
 #![deny(rust_2018_idioms)]
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -482,7 +483,7 @@ impl<T> Receiver<T> {
 
         let channel_ptr = self.channel_ptr;
 
-        // Don't run our Drop implementation if we are receiving consuming ourselves.
+        // Don't run our Drop implementation. This consuming recv method is responsible for freeing.
         mem::forget(self);
 
         // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
