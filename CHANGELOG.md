@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+- Handle the UNPARKING state correctly in `Receiver::drop()`.
+
 
 ## [0.1.10] - 2025-02-04
 ### Added
