@@ -98,6 +98,32 @@ fn send_then_poll() {
     })
 }
 
+// Make sure the receiver can be dropped while a send is happening in parallel
+#[cfg(feature = "async")]
+#[test]
+fn poll_then_drop_receiver_during_send() {
+    loom::model(|| {
+        let (sender, mut receiver) = oneshot::channel::<u128>();
+
+        let (waker, _waker_handle) = helpers::waker::waker();
+        let mut context = task::Context::from_waker(&waker);
+
+        // Put the channel into the receiving state
+        assert_eq!(Pin::new(&mut receiver).poll(&mut context), Poll::Pending);
+
+        // Spawn a separate thread that sends in parallel
+        let t = thread::spawn(move || {
+            let _ = sender.send(1234);
+        });
+
+        // Drop the receiver. Loom will make sure all thread interleavings with the send are tested
+        drop(receiver);
+
+        // The send operation should also not have panicked
+        t.join().unwrap();
+    })
+}
+
 #[cfg(feature = "async")]
 #[test]
 fn poll_then_send() {
