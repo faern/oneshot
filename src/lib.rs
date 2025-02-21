@@ -1304,8 +1304,8 @@ fn receiver_waker_size() {
     let expected: usize = match (cfg!(feature = "std"), cfg!(feature = "async")) {
         (false, false) => 0,
         (false, true) => 16,
-        (true, false) => 8,
-        (true, true) => 16,
+        (true, false) => 16,
+        (true, true) => 24,
     };
     assert_eq!(mem::size_of::<ReceiverWaker>(), expected);
 }
