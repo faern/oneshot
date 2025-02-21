@@ -42,7 +42,7 @@ fn multiple_receiver_polls_keeps_only_latest_waker() {
         let waker1 = unsafe { task::Waker::from_raw(raw_waker1) };
         let mut context1 = task::Context::from_waker(&waker1);
 
-        let (_sender, mut receiver) = oneshot::channel::<()>();
+        let (_sender, mut receiver) = oneshot::async_channel::<()>();
 
         let poll_result = future::Future::poll(pin::Pin::new(&mut receiver), &mut context1);
         assert_eq!(poll_result, task::Poll::Pending);

@@ -88,37 +88,9 @@ async fn await_before_send_then_drop_sender_async_std() {
     t.await;
 }
 
-// Tests that the Receiver handles being used synchronously even after being polled
-#[tokio::test]
-async fn poll_future_and_then_try_recv() {
-    use core::future::Future;
-    use core::pin::Pin;
-    use core::task::{self, Poll};
-
-    struct StupidReceiverFuture(oneshot::Receiver<()>);
-
-    impl Future for StupidReceiverFuture {
-        type Output = Result<(), oneshot::RecvError>;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-            let poll_result = Future::poll(Pin::new(&mut self.0), cx);
-            self.0.try_recv().expect_err("Should never be a message");
-            poll_result
-        }
-    }
-
-    let (sender, receiver) = oneshot::channel();
-    let t = tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        mem::drop(sender);
-    });
-    StupidReceiverFuture(receiver).await.unwrap_err();
-    t.await.unwrap();
-}
-
 #[tokio::test]
 async fn poll_receiver_then_drop_it() {
-    let (sender, receiver) = oneshot::channel::<()>();
+    let (sender, receiver) = oneshot::async_channel::<()>();
     // This will poll the receiver and then give up after 100 ms.
     tokio::time::timeout(Duration::from_millis(100), receiver)
         .await
