@@ -1056,8 +1056,7 @@ impl<T> Drop for Receiver<T> {
             #[cfg(any(feature = "std", feature = "async"))]
             UNPARKING => loop {
                 hint::spin_loop();
-                // ORDERING: We do not care about the message anymore since we are being dropped,
-                // all we want to know is when the sender is done exercising the waker.
+                // ORDERING: The load above has already synchronized with the write of the message.
                 match channel.state.load(Relaxed) {
                     MESSAGE => {
                         // SAFETY: we are in the message state so the message is initialized
