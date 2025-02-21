@@ -116,6 +116,8 @@
 #![deny(rust_2018_idioms)]
 #![cfg_attr(not(feature = "std"), no_std)]
 // Enables this nightly only feature for the documentation build on docs.rs.
+// To test this locally, build the docs with:
+// `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features`
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
