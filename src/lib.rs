@@ -517,10 +517,6 @@ impl<T> Receiver<T> {
     ///
     /// If a sent message has already been extracted from this channel this method will return an
     /// error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv(self) -> Result<T, RecvError> {
         // Note that we don't need to worry about changing the state to disconnected or setting the
@@ -650,9 +646,6 @@ impl<T> Receiver<T> {
 
                 Err(RecvError)
             }
-            // The receiver must have been `Future::poll`ed prior to this call.
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -663,10 +656,6 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         self.start_recv_ref(RecvError, |channel| {
@@ -706,10 +695,6 @@ impl<T> Receiver<T> {
     ///
     /// If the supplied `timeout` is so large that Rust's `Instant` type can't represent this point
     /// in the future this falls back to an indefinitely blocking receive operation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
@@ -726,10 +711,6 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         /// # Safety
@@ -945,9 +926,6 @@ impl<T> Receiver<T> {
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(disconnected_error),
-            // The receiver must have been `Future::poll`ed prior to this call.
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -1392,10 +1370,6 @@ fn receiver_waker_size() {
     };
     assert_eq!(mem::size_of::<ReceiverWaker>(), expected);
 }
-
-#[cfg(all(feature = "std", feature = "async"))]
-const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
-    "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
 
 #[inline]
 pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {
