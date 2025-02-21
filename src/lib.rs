@@ -10,7 +10,7 @@
 //! The sender's send method is non-blocking, and potentially lock- and wait-free.
 //! See documentation on [Sender::send] for situations where it might not be fully wait-free.
 //! The receiver supports both lock- and wait-free `try_recv` as well as indefinite and time
-//! limited thread blocking receive operations. The receiver also implements `Future` and
+//! limited thread blocking receive operations. The receiver also implements `IntoFuture` and
 //! supports asynchronously awaiting the message.
 //!
 //!
@@ -83,10 +83,10 @@
 //! that should work smoothly between the sync and async parts of the program!
 //!
 //! This library achieves that by having a fast and cheap send operation that can
-//! be used in both sync threads and async tasks. The receiver has both thread blocking
-//! receive methods for synchronous usage, and implements `Future` for asynchronous usage.
+//! be used in both regular threads and async tasks. The receiver has both thread blocking
+//! receive methods for synchronous usage, and implements `IntoFuture` for asynchronous usage.
 //!
-//! The receiving endpoint of this channel implements Rust's `Future` trait and can be waited on
+//! The receiving endpoint of this channel implements Rust's `IntoFuture` trait and can be waited on
 //! in an asynchronous task. This implementation is completely executor/runtime agnostic. It should
 //! be possible to use this library with any executor, or even pass messages between tasks running
 //! in different executors.
