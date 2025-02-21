@@ -1050,6 +1050,32 @@ impl<T> Drop for Receiver<T> {
                 // SAFETY: see safety comment at top of function
                 unsafe { dealloc(self.channel_ptr) };
             }
+            // The sender has observed the RECEIVING state and is currently reading the waker from
+            // a poll. We need to loop here until we observe the MESSAGE or DISCONNECTED state.
+            // We busy loop here since we know the sender is done very soon.
+            #[cfg(any(feature = "std", feature = "async"))]
+            UNPARKING => loop {
+                hint::spin_loop();
+                // ORDERING: We do not care about the message anymore since we are being dropped,
+                // all we want to know is when the sender is done exercising the waker.
+                match channel.state.load(Relaxed) {
+                    MESSAGE => {
+                        // SAFETY: we are in the message state so the message is initialized
+                        unsafe { channel.drop_message() };
+
+                        // SAFETY: see safety comment at top of function
+                        unsafe { dealloc(self.channel_ptr) };
+                        break;
+                    }
+                    DISCONNECTED => {
+                        // SAFETY: see safety comment at top of function
+                        unsafe { dealloc(self.channel_ptr) };
+                        break;
+                    }
+                    UNPARKING => (),
+                    _ => unreachable!(),
+                }
+            },
             _ => unreachable!(),
         }
     }
