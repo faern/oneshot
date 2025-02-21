@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+- Add a separate type `AsyncReceiver` that implements `Future` instead of implementing it
+  directly on the `Receiver` type. Now the `Receiver` implements `IntoFuture` instead.
+  This is a breaking change. This change removes the possible panics in many recv* methods,
+  and it simplifies some code a bit.
+
 
 ## [0.1.10] - 2025-02-04
 ### Added
