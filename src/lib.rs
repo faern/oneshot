@@ -1067,31 +1067,29 @@ impl<T> Drop for Receiver<T> {
                 // SAFETY: see safety comment at top of function
                 unsafe { dealloc(self.channel_ptr) };
             }
-            // The sender has observed the RECEIVING state and is currently reading the waker from
-            // a poll. We need to loop here until we observe the MESSAGE or DISCONNECTED state.
+            // This receiver was previously polled, so the channel was in the RECEIVING state.
+            // But the sender has observed the RECEIVING state and is currently reading the waker
+            // to wake us up. We need to loop here until we observe the MESSAGE or DISCONNECTED state.
             // We busy loop here since we know the sender is done very soon.
             #[cfg(any(feature = "std", feature = "async"))]
-            UNPARKING => loop {
-                hint::spin_loop();
-                // ORDERING: The load above has already synchronized with the write of the message.
-                match channel.state.load(Relaxed) {
-                    MESSAGE => {
-                        // SAFETY: we are in the message state so the message is initialized
-                        unsafe { channel.drop_message() };
-
-                        // SAFETY: see safety comment at top of function
-                        unsafe { dealloc(self.channel_ptr) };
-                        break;
+            UNPARKING => {
+                loop {
+                    hint::spin_loop();
+                    // ORDERING: The swap above has already synchronized with the write of the message.
+                    match channel.state.load(Relaxed) {
+                        MESSAGE => {
+                            // SAFETY: we are in the message state so the message is initialized
+                            unsafe { channel.drop_message() };
+                            break;
+                        }
+                        DISCONNECTED => break,
+                        UNPARKING => (),
+                        _ => unreachable!(),
                     }
-                    DISCONNECTED => {
-                        // SAFETY: see safety comment at top of function
-                        unsafe { dealloc(self.channel_ptr) };
-                        break;
-                    }
-                    UNPARKING => (),
-                    _ => unreachable!(),
                 }
-            },
+                // SAFETY: see safety comment at top of function
+                unsafe { dealloc(self.channel_ptr) };
+            }
             _ => unreachable!(),
         }
     }
