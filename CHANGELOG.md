@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
-
-- Handle the UNPARKING state correctly in `Receiver::drop()`.
+### Fixed
+- Handle the `UNPARKING` state correctly in `Receiver::drop()`. Fixes a panic that could
+  occur if a `Receiver` had been first polled as a future and then was being dropped
+  in parallel with the `Sender` sending a message.
 
 
 ## [0.1.10] - 2025-02-04
