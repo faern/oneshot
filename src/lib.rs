@@ -142,9 +142,9 @@ use loom::{
     sync::atomic::{fence, AtomicU8, Ordering::*},
 };
 
-#[cfg(all(feature = "async", not(oneshot_loom)))]
+#[cfg(all(any(feature = "std", feature = "async"), not(oneshot_loom)))]
 use core::hint;
-#[cfg(all(feature = "async", oneshot_loom))]
+#[cfg(all(any(feature = "std", feature = "async"), oneshot_loom))]
 use loom::hint;
 
 #[cfg(feature = "async")]
