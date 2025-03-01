@@ -10,7 +10,7 @@
 //! The sender's send method is non-blocking, and potentially lock- and wait-free.
 //! See documentation on [Sender::send] for situations where it might not be fully wait-free.
 //! The receiver supports both lock- and wait-free `try_recv` as well as indefinite and time
-//! limited thread blocking receive operations. The receiver also implements `Future` and
+//! limited thread blocking receive operations. The receiver also implements `IntoFuture` and
 //! supports asynchronously awaiting the message.
 //!
 //!
@@ -83,10 +83,10 @@
 //! that should work smoothly between the sync and async parts of the program!
 //!
 //! This library achieves that by having a fast and cheap send operation that can
-//! be used in both sync threads and async tasks. The receiver has both thread blocking
-//! receive methods for synchronous usage, and implements `Future` for asynchronous usage.
+//! be used in both regular threads and async tasks. The receiver has both thread blocking
+//! receive methods for synchronous usage, and implements `IntoFuture` for asynchronous usage.
 //!
-//! The receiving endpoint of this channel implements Rust's `Future` trait and can be waited on
+//! The receiving endpoint of this channel implements Rust's `IntoFuture` trait and can be waited on
 //! in an asynchronous task. This implementation is completely executor/runtime agnostic. It should
 //! be possible to use this library with any executor, or even pass messages between tasks running
 //! in different executors.
@@ -203,6 +203,21 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     )
 }
 
+/// Ergonomic shorthand for creating a channel and immediately convert the [`Receiver`] into
+/// a future.
+///
+/// This can be useful when you need to pass the receiver to a function that expects a
+/// type implementing [`Future`](core::future::Future) directly. Using this function is not necessary when
+/// you are going to use `.await` on the receiver, as that will automatically call
+/// [`IntoFuture::into_future`](core::future::IntoFuture::into_future) in the background.
+#[cfg(feature = "async")]
+#[inline(always)]
+pub fn async_channel<T>() -> (Sender<T>, AsyncReceiver<T>) {
+    let (sender, receiver) = channel();
+    let async_receiver = core::future::IntoFuture::into_future(receiver);
+    (sender, async_receiver)
+}
+
 /// Sending end of a oneshot channel.
 ///
 /// Created and returned from the [`channel`] function.
@@ -246,6 +261,20 @@ pub struct Receiver<T> {
     channel_ptr: NonNull<Channel<T>>,
 }
 
+/// A version of [`Receiver`] that implements [`Future`](core::future::Future), for awaiting the
+/// message in an async context.
+///
+/// This type is automatically created and polled in the background when awaiting a [`Receiver`].
+/// But it can also be created explicitly with the [`async_channel`] function or by calling
+/// [`IntoFuture::into_future`](core::future::IntoFuture::into_future) on the [`Receiver`].
+#[cfg(feature = "async")]
+#[derive(Debug)]
+pub struct AsyncReceiver<T> {
+    // Covariance is the right choice here. Consider the example presented in Sender, and you'll
+    // see that if we replaced `rx` instead then we would get the expected behavior
+    channel_ptr: NonNull<Channel<T>>,
+}
+
 unsafe impl<T: Send> Send for Sender<T> {}
 
 // SAFETY: The only methods that assumes there is only a single reference to the sender
@@ -254,7 +283,11 @@ unsafe impl<T: Send> Send for Sender<T> {}
 unsafe impl<T: Sync> Sync for Sender<T> {}
 
 unsafe impl<T: Send> Send for Receiver<T> {}
-impl<T> Unpin for Receiver<T> {}
+
+#[cfg(feature = "async")]
+unsafe impl<T: Send> Send for AsyncReceiver<T> {}
+#[cfg(feature = "async")]
+impl<T> Unpin for AsyncReceiver<T> {}
 
 impl<T> Sender<T> {
     /// Sends `message` over the channel to the corresponding [`Receiver`].
@@ -484,10 +517,6 @@ impl<T> Receiver<T> {
     ///
     /// If a sent message has already been extracted from this channel this method will return an
     /// error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv(self) -> Result<T, RecvError> {
         // Note that we don't need to worry about changing the state to disconnected or setting the
@@ -617,9 +646,6 @@ impl<T> Receiver<T> {
 
                 Err(RecvError)
             }
-            // The receiver must have been `Future::poll`ed prior to this call.
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -630,10 +656,6 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         self.start_recv_ref(RecvError, |channel| {
@@ -673,10 +695,6 @@ impl<T> Receiver<T> {
     ///
     /// If the supplied `timeout` is so large that Rust's `Instant` type can't represent this point
     /// in the future this falls back to an indefinitely blocking receive operation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
@@ -693,10 +711,6 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         /// # Safety
@@ -912,9 +926,6 @@ impl<T> Receiver<T> {
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(disconnected_error),
-            // The receiver must have been `Future::poll`ed prior to this call.
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -945,7 +956,23 @@ impl<T> Receiver<T> {
 }
 
 #[cfg(feature = "async")]
-impl<T> core::future::Future for Receiver<T> {
+impl<T> core::future::IntoFuture for Receiver<T> {
+    type Output = Result<T, RecvError>;
+    type IntoFuture = AsyncReceiver<T>;
+
+    #[inline(always)]
+    fn into_future(self) -> Self::IntoFuture {
+        let Receiver { channel_ptr } = self;
+
+        // Don't run our Drop implementation, since the receiver lives on as an async receiver.
+        mem::forget(self);
+
+        AsyncReceiver { channel_ptr }
+    }
+}
+
+#[cfg(feature = "async")]
+impl<T> core::future::Future for AsyncReceiver<T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
@@ -1087,6 +1114,40 @@ impl<T> Drop for Receiver<T> {
                         _ => unreachable!(),
                     }
                 }
+                // SAFETY: see safety comment at top of function
+                unsafe { dealloc(self.channel_ptr) };
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[cfg(feature = "async")]
+impl<T> Drop for AsyncReceiver<T> {
+    fn drop(&mut self) {
+        // SAFETY: since the receiving side is still alive the sender would have observed that and
+        // left deallocating the channel allocation to us.
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
+        // Set the channel state to disconnected and read what state the receiver was in
+        match channel.state.swap(DISCONNECTED, Acquire) {
+            // The sender has not sent anything, nor is it dropped.
+            EMPTY => (),
+            // The sender already sent something. We must drop it, and free the channel.
+            MESSAGE => {
+                // SAFETY: we are in the message state so the message is initialized
+                unsafe { channel.drop_message() };
+
+                // SAFETY: see safety comment at top of function
+                unsafe { dealloc(self.channel_ptr) };
+            }
+            // The receiver has been polled.
+            RECEIVING => {
+                // TODO: figure this out when async is fixed
+                unsafe { channel.drop_waker() };
+            }
+            // The sender was already dropped. We are responsible for freeing the channel.
+            DISCONNECTED => {
                 // SAFETY: see safety comment at top of function
                 unsafe { dealloc(self.channel_ptr) };
             }
@@ -1332,10 +1393,6 @@ fn receiver_waker_size() {
     };
     assert_eq!(mem::size_of::<ReceiverWaker>(), expected);
 }
-
-#[cfg(all(feature = "std", feature = "async"))]
-const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
-    "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
 
 #[inline]
 pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {

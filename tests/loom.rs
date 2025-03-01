@@ -5,7 +5,7 @@ use oneshot::TryRecvError;
 use loom::hint;
 use loom::thread;
 #[cfg(feature = "async")]
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 #[cfg(feature = "async")]
 use std::pin::Pin;
 #[cfg(feature = "async")]
@@ -73,7 +73,7 @@ fn async_recv() {
         let t1 = thread::spawn(move || {
             sender.send(987).unwrap();
         });
-        assert_eq!(loom::future::block_on(receiver), Ok(987));
+        assert_eq!(loom::future::block_on(receiver.into_future()), Ok(987));
         t1.join().unwrap();
     })
 }
@@ -82,7 +82,7 @@ fn async_recv() {
 #[test]
 fn send_then_poll() {
     loom::model(|| {
-        let (sender, mut receiver) = oneshot::channel::<u128>();
+        let (sender, mut receiver) = oneshot::async_channel::<u128>();
         sender.send(1234).unwrap();
 
         let (waker, waker_handle) = helpers::waker::waker();
@@ -128,7 +128,7 @@ fn poll_then_drop_receiver_during_send() {
 #[test]
 fn poll_then_send() {
     loom::model(|| {
-        let (sender, mut receiver) = oneshot::channel::<u128>();
+        let (sender, mut receiver) = oneshot::async_channel::<u128>();
 
         let (waker, waker_handle) = helpers::waker::waker();
         let mut context = task::Context::from_waker(&waker);
@@ -157,7 +157,7 @@ fn poll_then_send() {
 #[test]
 fn poll_with_different_wakers() {
     loom::model(|| {
-        let (sender, mut receiver) = oneshot::channel::<u128>();
+        let (sender, mut receiver) = oneshot::async_channel::<u128>();
 
         let (waker1, waker_handle1) = helpers::waker::waker();
         let mut context1 = task::Context::from_waker(&waker1);
@@ -188,62 +188,5 @@ fn poll_with_different_wakers() {
         assert_eq!(waker_handle2.clone_count(), 1);
         assert_eq!(waker_handle2.drop_count(), 1);
         assert_eq!(waker_handle2.wake_count(), 1);
-    })
-}
-
-#[cfg(feature = "async")]
-#[test]
-fn poll_then_try_recv() {
-    loom::model(|| {
-        let (_sender, mut receiver) = oneshot::channel::<u128>();
-
-        let (waker, waker_handle) = helpers::waker::waker();
-        let mut context = task::Context::from_waker(&waker);
-
-        assert_eq!(Pin::new(&mut receiver).poll(&mut context), Poll::Pending);
-        assert_eq!(waker_handle.clone_count(), 1);
-        assert_eq!(waker_handle.drop_count(), 0);
-        assert_eq!(waker_handle.wake_count(), 0);
-
-        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
-
-        assert_eq!(Pin::new(&mut receiver).poll(&mut context), Poll::Pending);
-        assert_eq!(waker_handle.clone_count(), 2);
-        assert_eq!(waker_handle.drop_count(), 1);
-        assert_eq!(waker_handle.wake_count(), 0);
-    })
-}
-
-#[cfg(feature = "async")]
-#[test]
-fn poll_then_try_recv_while_sending() {
-    loom::model(|| {
-        let (sender, mut receiver) = oneshot::channel::<u128>();
-
-        let (waker, waker_handle) = helpers::waker::waker();
-        let mut context = task::Context::from_waker(&waker);
-
-        assert_eq!(Pin::new(&mut receiver).poll(&mut context), Poll::Pending);
-        assert_eq!(waker_handle.clone_count(), 1);
-        assert_eq!(waker_handle.drop_count(), 0);
-        assert_eq!(waker_handle.wake_count(), 0);
-
-        let t = thread::spawn(move || {
-            sender.send(1234).unwrap();
-        });
-
-        let msg = loop {
-            match receiver.try_recv() {
-                Ok(msg) => break msg,
-                Err(TryRecvError::Empty) => hint::spin_loop(),
-                Err(TryRecvError::Disconnected) => panic!("Should not be disconnected"),
-            }
-        };
-        assert_eq!(msg, 1234);
-        assert_eq!(waker_handle.clone_count(), 1);
-        assert_eq!(waker_handle.drop_count(), 1);
-        assert_eq!(waker_handle.wake_count(), 1);
-
-        t.join().unwrap();
     })
 }
