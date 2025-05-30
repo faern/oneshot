@@ -225,7 +225,7 @@ pub struct Sender<T> {
     // let long_ref = rx2.recv().unwrap();
     // ```
     //
-    // If this type were covariant then we could safely extend lifetimes, which is not okay.
+    // If this type were contravariant, then we could safely extend lifetimes, which is not okay.
     // Hence, we enforce invariance.
     _invariant: PhantomData<fn(T) -> T>,
 }
