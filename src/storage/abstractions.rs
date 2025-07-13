@@ -1,7 +1,7 @@
 use crate::Channel;
 
 /// The mechanism used to manage the storage of the inner state of a channel of `T`.
-#[expect(private_bounds, reason = "sealed trait with private API surface")]
+#[allow(private_bounds)] // Sealed trait with private API surface.
 pub trait Storage<T>: StoragePrivate<T> {}
 
 /// Usage model is to treat the implementing type as if it were a `NonNull<Channel<T>>`.
