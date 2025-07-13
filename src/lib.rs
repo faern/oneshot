@@ -125,6 +125,9 @@
 #[cfg(not(oneshot_loom))]
 extern crate alloc;
 
+mod storage;
+pub use storage::*;
+
 use core::{
     marker::PhantomData,
     mem::{self, MaybeUninit},
@@ -176,11 +179,7 @@ mod thread {
 }
 
 #[cfg(oneshot_loom)]
-mod loombox;
-#[cfg(not(oneshot_loom))]
-use alloc::boxed::Box;
-#[cfg(oneshot_loom)]
-use loombox::Box;
+pub(crate) mod loombox;
 
 mod errors;
 // Wildcard imports are not nice. But since multiple errors have various conditional compilation,
@@ -189,17 +188,48 @@ pub use errors::*;
 
 /// Creates a new oneshot channel and returns the two endpoints, [`Sender`] and [`Receiver`].
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    // Allocate the channel on the heap and get the pointer.
-    // The last endpoint of the channel to be alive is responsible for freeing the channel
-    // and dropping any object that might have been written to it.
-    let channel_ptr = NonNull::from(Box::leak(Box::new(Channel::new())));
+    let storage = Global::<T>::new();
 
     (
         Sender {
-            channel_ptr,
+            storage: storage.clone(),
             _invariant: PhantomData,
         },
-        Receiver { channel_ptr },
+        Receiver {
+            storage,
+            _invariant: PhantomData,
+        },
+    )
+}
+
+/// Creates a new oneshot channel using a custom object to store its internal state,
+/// returning the two endpoints, [`Sender`] and [`Receiver`].
+///
+/// # Safety
+///
+/// The caller must guarantee that the provided `ChannelStorage<T>` pointer is valid and
+/// the storage is not concurrently in use by any other `oneshot` channel.
+///
+/// The caller must guarantee that no `&mut` exclusive references are created to the
+/// `ChannelStorage<T>` (including to its parent object if embedded into another type)
+/// for the lifetime of the channel and any associated error types (i.e. until
+/// the `release` fn is called).
+pub unsafe fn channel_with_storage<T>(
+    storage: NonNull<ChannelStorage<T>>,
+    release: fn(NonNull<ChannelStorage<T>>),
+) -> (Sender<T, External<T>>, Receiver<T, External<T>>) {
+    // SAFETY: Forwarding the safety requirements to the caller.
+    let external = unsafe { External::new(storage, release) };
+
+    (
+        Sender {
+            storage: external.clone(),
+            _invariant: PhantomData,
+        },
+        Receiver {
+            storage: external,
+            _invariant: PhantomData,
+        },
     )
 }
 
@@ -209,8 +239,9 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 ///
 /// Can be used to send a message to the corresponding [`Receiver`].
 #[derive(Debug)]
-pub struct Sender<T> {
-    channel_ptr: NonNull<Channel<T>>,
+pub struct Sender<T, S: Storage<T> = Global<T>> {
+    storage: S,
+
     // In reality we want contravariance, however we can't obtain that.
     //
     // Consider the following scenario:
@@ -240,23 +271,25 @@ pub struct Sender<T> {
 /// This type implement [`IntoFuture`](core::future::IntoFuture) when the `async` feature is enabled.
 /// This allows awaiting it directly in an async context.
 #[derive(Debug)]
-pub struct Receiver<T> {
+pub struct Receiver<T, S: Storage<T> = Global<T>> {
+    storage: S,
+
     // Covariance is the right choice here. Consider the example presented in Sender, and you'll
     // see that if we replaced `rx` instead then we would get the expected behavior
-    channel_ptr: NonNull<Channel<T>>,
+    _invariant: PhantomData<T>,
 }
 
-unsafe impl<T: Send> Send for Sender<T> {}
+unsafe impl<T: Send, S: Storage<T>> Send for Sender<T, S> {}
 
 // SAFETY: The only methods that assumes there is only a single reference to the sender
 // takes `self` by value, guaranteeing that there is only one reference to the sender at
 // the time it is called.
-unsafe impl<T: Sync> Sync for Sender<T> {}
+unsafe impl<T: Sync, S: Storage<T>> Sync for Sender<T, S> {}
 
-unsafe impl<T: Send> Send for Receiver<T> {}
-impl<T> Unpin for Receiver<T> {}
+unsafe impl<T: Send, S: Storage<T>> Send for Receiver<T, S> {}
+impl<T, S: Storage<T>> Unpin for Receiver<T, S> {}
 
-impl<T> Sender<T> {
+impl<T, S: Storage<T>> Sender<T, S> {
     /// Sends `message` over the channel to the corresponding [`Receiver`].
     ///
     /// Returns an error if the receiver has already been dropped. The message can
@@ -270,16 +303,18 @@ impl<T> Sender<T> {
     /// depends on your executor. If this method returns a `SendError`, please mind that dropping
     /// the error involves running any drop implementation on the message type, and freeing the
     /// channel's heap allocation, which might or might not be lock-free.
-    pub fn send(self, message: T) -> Result<(), SendError<T>> {
-        let channel_ptr = self.channel_ptr;
+    pub fn send(self, message: T) -> Result<(), SendError<T, S>> {
+        let storage = self.storage.clone();
 
         // Don't run our Drop implementation if send was called, any cleanup now happens here
         mem::forget(self);
 
-        // SAFETY: The channel exists on the heap for the entire duration of this method and we
-        // only ever acquire shared references to it. Note that if the receiver disconnects it
-        // does not free the channel.
-        let channel = unsafe { channel_ptr.as_ref() };
+        // SAFETY: The storage trait requires us to only `release()` once per family of clones.
+        // By forgetting self, we ensure that `Drop` does not call it, so now it is between the
+        // receiver and the sender. If the receiver disconnects before we fill the channel, it
+        // does not release it, therefore we know that either we fill the channel and the receiver
+        // will later clean it up or we detect here that there is nobody listening and release it.
+        let channel = unsafe { storage.as_ref() };
 
         // Write the message into the channel on the heap.
         // SAFETY: The receiver only ever accesses this memory location if we are in the MESSAGE
@@ -332,11 +367,11 @@ impl<T> Sender<T> {
                 Ok(())
             }
             // The receiver was already dropped. The error is responsible for freeing the channel.
-            // SAFETY: since the receiver disconnected it will no longer access `channel_ptr`, so
+            // SAFETY: since the receiver disconnected it will no longer access the storage, so
             // we can transfer exclusive ownership of the channel's resources to the error.
             // Moreover, since we just placed the message in the channel, the channel contains a
             // valid message.
-            DISCONNECTED => Err(unsafe { SendError::new(channel_ptr) }),
+            DISCONNECTED => Err(unsafe { SendError::new(storage) }),
             _ => unreachable!(),
         }
     }
@@ -345,24 +380,26 @@ impl<T> Sender<T> {
     ///
     /// If true is returned, a future call to send is guaranteed to return an error.
     pub fn is_closed(&self) -> bool {
-        // SAFETY: The channel exists on the heap for the entire duration of this method and we
-        // only ever acquire shared references to it. Note that if the receiver disconnects it
-        // does not free the channel.
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        // SAFETY: If the receiver disconnects before the sender, it does not release the channel,
+        // so we know that the storage is still valid. Therefore, if it is even possible to call
+        // this method, we know the storage must be valid for the duration of this method.
+        let channel = unsafe { self.storage.as_ref() };
 
         // ORDERING: We *chose* a Relaxed ordering here as it sufficient to
         // enforce the method's contract: "if true is returned, a future
         // call to send is guaranteed to return an error."
         channel.state.load(Relaxed) == DISCONNECTED
     }
+}
 
+impl<T> Sender<T, Global<T>> {
     /// Consumes the Sender, returning a raw pointer to the channel on the heap.
     ///
     /// This is intended to simplify using oneshot channels with some FFI code. The only safe thing
     /// to do with the returned pointer is to later reconstruct the Sender with [Sender::from_raw].
     /// Memory will leak if the Sender is never reconstructed.
     pub fn into_raw(self) -> *mut () {
-        let raw = self.channel_ptr.as_ptr() as *mut ();
+        let raw = self.storage.to_raw().as_ptr() as *mut ();
         mem::forget(self);
         raw
     }
@@ -376,13 +413,13 @@ impl<T> Sender<T> {
     /// Constructing multiple Senders from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
         Self {
-            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
+            storage: Global::from_raw(NonNull::new_unchecked(raw as *mut Channel<T>)),
             _invariant: PhantomData,
         }
     }
 }
 
-impl<T> Drop for Sender<T> {
+impl<T, S: Storage<T>> Drop for Sender<T, S> {
     fn drop(&mut self) {
         // SAFETY: The receiver only ever frees the channel if we are in the MESSAGE or
         // DISCONNECTED states. If we are in the MESSAGE state, then we called
@@ -390,7 +427,7 @@ impl<T> Drop for Sender<T> {
         // DISCONNECTED state, then the receiver either received a MESSAGE so this statement is
         // unreachable, or was dropped and observed that our side was still alive, and thus didn't
         // free the channel.
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        let channel = unsafe { self.storage.as_ref() };
 
         // Set the channel state to disconnected and read what state the receiver was in
         // ORDERING: we don't need release ordering here since there are no modifications we
@@ -420,20 +457,22 @@ impl<T> Drop for Sender<T> {
                 // happens-before unparking the receiver.
                 waker.unpark();
             }
-            // The receiver was already dropped. We are responsible for freeing the channel.
+            // The receiver was already dropped. We are responsible for releasing the channel storage.
             DISCONNECTED => {
                 // SAFETY: when the receiver switches the state to DISCONNECTED they have received
                 // the message or will no longer be trying to receive the message, and have
                 // observed that the sender is still alive, meaning that we're responsible for
-                // freeing the channel allocation.
-                unsafe { dealloc(self.channel_ptr) };
+                // releasing the channel storage.
+                unsafe {
+                    self.storage.release();
+                }
             }
             _ => unreachable!(),
         }
     }
 }
 
-impl<T> Receiver<T> {
+impl<T, S: Storage<T>> Receiver<T, S> {
     /// Checks if there is a message in the channel without blocking. Returns:
     ///  * `Ok(message)` if there was a message in the channel.
     ///  * `Err(Empty)` if the [`Sender`] is alive, but has not yet sent a message.
@@ -448,8 +487,8 @@ impl<T> Receiver<T> {
     /// performs one atomic integer store and copies the message from the heap to the stack for
     /// returning it.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        // SAFETY: The channel will not be freed while this method is still running.
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        // SAFETY: The channel will not be released while this method is still running.
+        let channel = unsafe { self.storage.as_ref() };
 
         // ORDERING: we use acquire ordering to synchronize with the store of the message.
         match channel.state.load(Acquire) {
@@ -495,7 +534,7 @@ impl<T> Receiver<T> {
         // self, and this function does not exit until the message has been received or both side
         // of the channel are inactive and cleaned up.
 
-        let channel_ptr = self.channel_ptr;
+        let mut storage = self.storage.clone();
 
         // Don't run our Drop implementation. This consuming recv method is responsible for freeing.
         mem::forget(self);
@@ -503,8 +542,8 @@ impl<T> Receiver<T> {
         // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
         // is still alive, meaning that even if the sender was dropped then it would have observed
         // the fact that we're still alive and left the responsibility of deallocating the
-        // channel to us, so channel_ptr is valid
-        let channel = unsafe { channel_ptr.as_ref() };
+        // channel to us, so the stored channel is valid
+        let channel = unsafe { storage.as_ref() };
 
         // ORDERING: we use acquire ordering to synchronize with the write of the message in the
         // case that it's available
@@ -542,17 +581,21 @@ impl<T> Receiver<T> {
                                 // SAFETY: we are in the message state so the message is valid
                                 let message = unsafe { channel.take_message() };
 
-                                // SAFETY: the Sender delegates the responsibility of deallocating
-                                // the channel to us upon sending the message
-                                unsafe { dealloc(channel_ptr) };
+                                // SAFETY: the Sender delegates the responsibility of releasing
+                                // the storage to us upon sending the message
+                                unsafe {
+                                    storage.release();
+                                };
 
                                 break Ok(message);
                             }
                             // The sender was dropped while we were parked.
                             DISCONNECTED => {
-                                // SAFETY: the Sender doesn't deallocate the channel allocation in
+                                // SAFETY: the Sender doesn't release the channel storage in
                                 // its drop implementation if we're receiving
-                                unsafe { dealloc(channel_ptr) };
+                                unsafe {
+                                    storage.release();
+                                };
 
                                 break Err(RecvError);
                             }
@@ -576,9 +619,11 @@ impl<T> Receiver<T> {
                         // SAFETY: we are in the message state so the message is valid
                         let message = unsafe { channel.take_message() };
 
-                        // SAFETY: the Sender delegates the responsibility of deallocating the
+                        // SAFETY: the Sender delegates the responsibility of releasing the
                         // channel to us upon sending the message
-                        unsafe { dealloc(channel_ptr) };
+                        unsafe {
+                            storage.release();
+                        };
 
                         Ok(message)
                     }
@@ -589,9 +634,11 @@ impl<T> Receiver<T> {
                         // need to drop it.
                         unsafe { channel.drop_waker() };
 
-                        // SAFETY: the sender does not deallocate the channel if it switches from
-                        // empty to disconnected so we need to free the allocation
-                        unsafe { dealloc(channel_ptr) };
+                        // SAFETY: the sender does not release the channel if it switches from
+                        // empty to disconnected so we need to release the storage.
+                        unsafe {
+                            storage.release();
+                        };
 
                         Err(RecvError)
                     }
@@ -605,15 +652,19 @@ impl<T> Receiver<T> {
 
                 // SAFETY: we are already in the message state so the sender has been forgotten
                 // and it's our job to clean up resources
-                unsafe { dealloc(channel_ptr) };
+                unsafe {
+                    storage.release();
+                };
 
                 Ok(message)
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => {
-                // SAFETY: the sender does not deallocate the channel if it switches from empty to
-                // disconnected so we need to free the allocation
-                unsafe { dealloc(channel_ptr) };
+                // SAFETY: the sender does not release the channel if it switches from empty to
+                // disconnected so we need to release the storage.
+                unsafe {
+                    storage.release();
+                };
 
                 Err(RecvError)
             }
@@ -803,9 +854,9 @@ impl<T> Receiver<T> {
     pub fn is_closed(&self) -> bool {
         // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
         // is still alive, meaning that even if the sender was dropped then it would have observed
-        // the fact that we're still alive and left the responsibility of deallocating the
-        // channel to us, so `self.channel` is valid
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        // the fact that we're still alive and left the responsibility of releasing the
+        // channel storage to us, so the channel in `self.storage` is valid
+        let channel = unsafe { self.storage.as_ref() };
 
         // ORDERING: We *chose* a Relaxed ordering here as it is sufficient to
         // enforce the method's contract. Once true has been observed, it will remain true.
@@ -821,9 +872,9 @@ impl<T> Receiver<T> {
     pub fn has_message(&self) -> bool {
         // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
         // is still alive, meaning that even if the sender was dropped then it would have observed
-        // the fact that we're still alive and left the responsibility of deallocating the
-        // channel to us, so `self.channel` is valid
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        // the fact that we're still alive and left the responsibility of releasing the
+        // channel storage to us, so the channel in `self.storage` is valid
+        let channel = unsafe { self.storage.as_ref() };
 
         // ORDERING: An acquire ordering is used to guarantee no subsequent loads is reordered
         // before this one. This upholds the contract that if true is returned, the next call to
@@ -846,9 +897,9 @@ impl<T> Receiver<T> {
     ) -> Result<T, E> {
         // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
         // is still alive, meaning that even if the sender was dropped then it would have observed
-        // the fact that we're still alive and left the responsibility of deallocating the
-        // channel to us, so `self.channel` is valid
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        // the fact that we're still alive and left the responsibility of releasing the
+        // channel storage to us, so the channel in `self.storage` is valid
+        let channel = unsafe { self.storage.as_ref() };
 
         // ORDERING: synchronize with the write of the message
         match channel.state.load(Acquire) {
@@ -918,14 +969,16 @@ impl<T> Receiver<T> {
             _ => unreachable!(),
         }
     }
+}
 
+impl<T> Receiver<T, Global<T>> {
     /// Consumes the Receiver, returning a raw pointer to the channel on the heap.
     ///
     /// This is intended to simplify using oneshot channels with some FFI code. The only safe thing
     /// to do with the returned pointer is to later reconstruct the Receiver with
     /// [Receiver::from_raw]. Memory will leak if the Receiver is never reconstructed.
     pub fn into_raw(self) -> *mut () {
-        let raw = self.channel_ptr.as_ptr() as *mut ();
+        let raw = self.storage.to_raw().as_ptr() as *mut ();
         mem::forget(self);
         raw
     }
@@ -939,7 +992,8 @@ impl<T> Receiver<T> {
     /// Constructing multiple Receivers from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
         Self {
-            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
+            storage: Global::from_raw(NonNull::new_unchecked(raw as *mut Channel<T>)),
+            _invariant: PhantomData,
         }
     }
 }
@@ -951,9 +1005,9 @@ impl<T> core::future::Future for Receiver<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         // SAFETY: the existence of the `self` parameter serves as a certificate that the receiver
         // is still alive, meaning that even if the sender was dropped then it would have observed
-        // the fact that we're still alive and left the responsibility of deallocating the
-        // channel to us, so `self.channel` is valid
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        // the fact that we're still alive and left the responsibility of releasing the
+        // channel storage to us, so the channel in `self.storage` is valid
+        let channel = unsafe { self.storage.as_ref() };
 
         // ORDERING: we use acquire ordering to synchronize with the store of the message.
         match channel.state.load(Acquire) {
@@ -1038,11 +1092,11 @@ impl<T> core::future::Future for Receiver<T> {
     }
 }
 
-impl<T> Drop for Receiver<T> {
+impl<T, S: Storage<T>> Drop for Receiver<T, S> {
     fn drop(&mut self) {
         // SAFETY: since the receiving side is still alive the sender would have observed that and
-        // left deallocating the channel allocation to us.
-        let channel = unsafe { self.channel_ptr.as_ref() };
+        // left releasing the channel storage to us.
+        let channel = unsafe { self.storage.as_ref() };
 
         // Set the channel state to disconnected and read what state the receiver was in
         match channel.state.swap(DISCONNECTED, Acquire) {
@@ -1054,7 +1108,7 @@ impl<T> Drop for Receiver<T> {
                 unsafe { channel.drop_message() };
 
                 // SAFETY: see safety comment at top of function
-                unsafe { dealloc(self.channel_ptr) };
+                unsafe { self.storage.release() };
             }
             // The receiver has been polled.
             #[cfg(feature = "async")]
@@ -1065,7 +1119,7 @@ impl<T> Drop for Receiver<T> {
             // The sender was already dropped. We are responsible for freeing the channel.
             DISCONNECTED => {
                 // SAFETY: see safety comment at top of function
-                unsafe { dealloc(self.channel_ptr) };
+                unsafe { self.storage.release() };
             }
             // This receiver was previously polled, so the channel was in the RECEIVING state.
             // But the sender has observed the RECEIVING state and is currently reading the waker
@@ -1088,7 +1142,7 @@ impl<T> Drop for Receiver<T> {
                     }
                 }
                 // SAFETY: see safety comment at top of function
-                unsafe { dealloc(self.channel_ptr) };
+                unsafe { self.storage.release() };
             }
             _ => unreachable!(),
         }
@@ -1123,7 +1177,7 @@ use states::*;
 /// * The message in the channel. This memory is uninitialized until the message is sent.
 /// * The waker instance for the thread or task that is currently receiving on this channel.
 ///   This memory is uninitialized until the receiver starts receiving.
-struct Channel<T> {
+pub(crate) struct Channel<T> {
     state: AtomicU8,
     message: UnsafeCell<MaybeUninit<T>>,
     waker: UnsafeCell<MaybeUninit<ReceiverWaker>>,
@@ -1336,8 +1390,3 @@ fn receiver_waker_size() {
 #[cfg(all(feature = "std", feature = "async"))]
 const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
     "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
-
-#[inline]
-pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {
-    drop(Box::from_raw(channel.as_ptr()))
-}

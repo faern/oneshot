@@ -1,48 +1,56 @@
-use super::{dealloc, Channel};
+use crate::Channel;
+use crate::Global;
+use crate::Storage;
+
 use core::fmt;
+use core::marker::PhantomData;
 use core::mem;
-use core::ptr::NonNull;
 
 /// An error returned when trying to send on a closed channel. Returned from
 /// [`Sender::send`](crate::Sender::send) if the corresponding [`Receiver`](crate::Receiver)
 /// has already been dropped.
 ///
 /// The message that could not be sent can be retreived again with [`SendError::into_inner`].
-pub struct SendError<T> {
-    channel_ptr: NonNull<Channel<T>>,
+pub struct SendError<T, S: Storage<T> = Global<T>> {
+    storage: S,
+
+    _t: PhantomData<T>,
 }
 
-unsafe impl<T: Send> Send for SendError<T> {}
-unsafe impl<T: Sync> Sync for SendError<T> {}
+unsafe impl<T: Send, S: Storage<T>> Send for SendError<T, S> {}
+unsafe impl<T: Sync, S: Storage<T>> Sync for SendError<T, S> {}
 
-impl<T> SendError<T> {
+impl<T, S: Storage<T>> SendError<T, S> {
     /// # Safety
     ///
     /// By calling this function, the caller semantically transfers ownership of the
     /// channel's resources to the created `SendError`. Thus the caller must ensure that the
     /// pointer is not used in a way which would violate this ownership transfer. Moreover,
     /// the caller must assert that the channel contains a valid, initialized message.
-    pub(crate) const unsafe fn new(channel_ptr: NonNull<Channel<T>>) -> Self {
-        Self { channel_ptr }
+    pub(crate) const unsafe fn new(storage: S) -> Self {
+        Self {
+            storage,
+            _t: PhantomData,
+        }
     }
 
     /// Consumes the error and returns the message that failed to be sent.
     #[inline]
     pub fn into_inner(self) -> T {
-        let channel_ptr = self.channel_ptr;
+        let mut storage = self.storage.clone();
 
         // Don't run destructor if we consumed ourselves. Freeing happens here.
         mem::forget(self);
 
         // SAFETY: we have ownership of the channel
-        let channel: &Channel<T> = unsafe { channel_ptr.as_ref() };
+        let channel: &Channel<T> = unsafe { storage.as_ref() };
 
         // SAFETY: we know that the message is initialized according to the safety requirements of
         // `new`
         let message = unsafe { channel.take_message() };
 
         // SAFETY: we own the channel
-        unsafe { dealloc(channel_ptr) };
+        unsafe { storage.release() };
 
         message
     }
@@ -50,35 +58,35 @@ impl<T> SendError<T> {
     /// Get a reference to the message that failed to be sent.
     #[inline]
     pub fn as_inner(&self) -> &T {
-        unsafe { self.channel_ptr.as_ref().message().assume_init_ref() }
+        unsafe { self.storage.as_ref().message().assume_init_ref() }
     }
 }
 
-impl<T> Drop for SendError<T> {
+impl<T, S: Storage<T>> Drop for SendError<T, S> {
     fn drop(&mut self) {
         // SAFETY: we have ownership of the channel and require that the message is initialized
         // upon construction
         unsafe {
-            self.channel_ptr.as_ref().drop_message();
-            dealloc(self.channel_ptr);
+            self.storage.as_ref().drop_message();
+            self.storage.release();
         }
     }
 }
 
-impl<T> fmt::Display for SendError<T> {
+impl<T, S: Storage<T>> fmt::Display for SendError<T, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "sending on a closed channel".fmt(f)
     }
 }
 
-impl<T> fmt::Debug for SendError<T> {
+impl<T, S: Storage<T>> fmt::Debug for SendError<T, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SendError<{}>(_)", stringify!(T))
     }
 }
 
 #[cfg(feature = "std")]
-impl<T> std::error::Error for SendError<T> {}
+impl<T, S: Storage<T>> std::error::Error for SendError<T, S> {}
 
 /// An error returned from receiving methods that block/wait until a message is available.
 ///

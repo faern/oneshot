@@ -1,7 +1,8 @@
 use oneshot::{Receiver, Sender};
 use std::mem;
 
-/// Just sanity check that both channel endpoints stay the size of a single pointer.
+/// Just sanity check that both channel endpoints stay the size of a single pointer
+/// when using the `Global` storage model, which is the default.
 #[test]
 fn channel_endpoints_single_pointer() {
     const PTR_SIZE: usize = mem::size_of::<*const ()>();
