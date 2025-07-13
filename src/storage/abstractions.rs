@@ -29,8 +29,8 @@ pub(crate) unsafe trait StoragePrivate<T> {
     ///
     /// # Safety
     ///
-    /// The caller must guarantee that `initialize()` has been called and `release()` has not been
-    /// called on any of the clones of this storage.
+    /// The caller must guarantee that `release()` has not been called on any storage
+    /// object in the same family of clones.
     unsafe fn as_ref(&self) -> &Channel<T>;
 
     /// Clones the storage, returning a new instance that points to the same underlying data.
