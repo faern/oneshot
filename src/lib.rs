@@ -127,7 +127,6 @@
 // To test this locally, build the docs with:
 // `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features`
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 #[cfg(not(oneshot_loom))]
 extern crate alloc;
