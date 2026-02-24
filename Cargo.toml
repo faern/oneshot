@@ -28,6 +28,11 @@ std = []
 # Enables async receiving via the AsyncReceiver receiver
 async = []
 
+[dependencies]
+# Use portable-atomic crate to support platforms without atomic CAS.
+# Enable require-cas feature to provide an error message if dependents require atomic CAS but the end user forgets to use single-core cfg or critical-section feature.
+extra-platforms = { package = "portable-atomic", version = "1.3", optional = true, default-features = false, features = ["require-cas"] }
+
 # Only used for internal correctness testing.
 # Downstream users of oneshot should never enable this feature. Enabling it does nothing.
 # To compile oneshot built against loom one must *also* set RUSTFLAGS="--cfg oneshot_loom"
